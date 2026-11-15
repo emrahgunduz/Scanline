@@ -91,14 +91,17 @@ struct SettingsView: View {
     }
 
     private var helperNeedsAction: Bool {
-        switch model.helperStatus {
+        if model.connectProblem != nil { return true }
+        return switch model.helperStatus {
         case .notInstalled?, .ruleMissing?, .unpinned?, .outdated?: true
         default: false
         }
     }
 
     private var helperButton: String {
-        switch model.helperStatus {
+        if model.connectProblem == .helperNotAuthorised { return "Repair Helper…" }
+        if model.connectProblem == .helperOutdated { return "Update Helper…" }
+        return switch model.helperStatus {
         case .notInstalled?: "Install Helper…"
         case .ruleMissing?: "Repair Helper…"
         case .unpinned?, .outdated?: "Update Helper…"
@@ -107,7 +110,9 @@ struct SettingsView: View {
     }
 
     private var helperBadge: String {
-        switch model.helperStatus {
+        if model.connectProblem == .helperNotAuthorised { return "Needs repair" }
+        if model.connectProblem == .helperOutdated { return "Update needed" }
+        return switch model.helperStatus {
         case .current?: "Up to date"
         case .outdated?: "Update available"
         case .unpinned?: "Update recommended"
@@ -119,7 +124,9 @@ struct SettingsView: View {
     }
 
     private var helperDetail: String {
-        switch model.helperStatus {
+        if model.connectProblem == .helperNotAuthorised { return "macOS won't start the helper for this account." }
+        if model.connectProblem == .helperOutdated { return "The installed helper is too old for this version of Scanline." }
+        return switch model.helperStatus {
         case .current?: "The installed helper matches this version of Scanline."
         case .outdated?: "The installed helper is from a different Scanline build."
         case .unpinned?: "Its sudo rule isn't pinned to the helper's exact bytes yet."

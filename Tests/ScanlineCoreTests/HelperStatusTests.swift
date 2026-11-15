@@ -123,3 +123,77 @@ private func session(_ make: @escaping @Sendable () throws -> ScannerTransport, 
     #expect(a.stopAndWait(timeout: 2))
     #expect(b.stopAndWait(timeout: 2))
 }
+
+// MARK: Banner decision
+
+@Test func bannerDecisionTable() {
+    typealias K = HelperBannerKind
+    func d(_ s: HelperStatus?, _ p: ConnectProblem? = nil, needs: Bool = false, dismissed: Bool = false) -> K? {
+        K.decide(status: s, problem: p, needsAccess: needs, dismissed: dismissed)
+    }
+    #expect(d(.current) == nil)                                   // the normal state never nags
+    #expect(d(nil) == nil)                                        // not checked yet
+    #expect(d(.notInstalled) == .install)
+    #expect(d(nil, needs: true) == .install)                      // vendor driver / nothing in use
+    #expect(d(.ruleMissing) == .repair)
+    #expect(d(.unpinned) == .secure)
+    #expect(d(.unpinned, dismissed: true) == nil)
+    #expect(d(.outdated) == .update)
+    #expect(d(.outdated, dismissed: true) == nil)
+    // What the scanner reports wins, and can't be dismissed.
+    #expect(d(.current, .helperOutdated) == .incompatible)
+    #expect(d(.outdated, .helperOutdated, dismissed: true) == .incompatible)
+    #expect(d(.current, .helperNotAuthorised) == .repair)        // e.g. a second macOS account
+    #expect(d(.current, .other) == nil)                           // unplugged scanner: not a helper issue
+    // A build without a bundled helper can't install one.
+    #expect(d(.bundleMissing, needs: true) == nil)
+    #expect(d(.bundleMissing, .helperOutdated) == nil)
+}
+
+@Test func connectProblemsAreStructured() {
+    #expect(ConnectProblem(ScanError.helperOutdated(installed: 1)) == .helperOutdated)
+    #expect(ConnectProblem(ScanError.helperNotAuthorised) == .helperNotAuthorised)
+    #expect(ConnectProblem(ScanError.deviceNotFound) == .other)
+    #expect(ConnectProblem(ScanError.protocolError("out of date")) == .other)   // no text matching
+}
+
+@Test func theSessionReportsWhyItIsNotConnected() throws {
+    let states = Locked<[SessionState]>([])
+    var s = ScanSession.Settings()
+    s.pollInterval = 0.05
+    let session = ScanSession(settings: s, logURL: nil, transport: { throw ScanError.helperOutdated(installed: 1) }) { e in
+        if case .state(let st) = e { states.withLock { $0.append(st) } }
+    }
+    session.start()
+    #expect(waitFor { !states.withLock { $0 }.isEmpty })
+    #expect(states.withLock { $0 }.first == .disconnected(ScanError.helperOutdated(installed: 1).description, problem: .helperOutdated))
+    #expect(session.stopAndWait(timeout: 2))
+}
+
+@Test func resumeKeepsTheSameWorkerAndCannotRestartAFinishedOne() throws {
+    let attempts = Locked(0)
+    let s = session({ throw ScanError.deviceNotFound }, attempts: attempts)
+    s.start()
+    #expect(waitFor { attempts.withLock { $0 } >= 1 })
+    s.stop()
+    #expect(s.resume())                                       // caught before the worker noticed
+    Thread.sleep(forTimeInterval: 2.3)
+    #expect(attempts.withLock { $0 } >= 2)                    // still retrying: same worker alive
+    #expect(s.stopAndWait(timeout: 3))
+    #expect(!s.resume())                                      // finished: must not pretend to run
+}
+
+@Test func aSudoRefusalIsReportedAsNotAuthorised() throws {
+    // A real child process that behaves like sudo without a matching rule.
+    let launcher: HelperTransport.Launcher = {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/bin/sh")
+        p.arguments = ["-c", "echo 'sudo: a password is required' >&2; exit 1"]
+        let i = Pipe(), o = Pipe(), e = Pipe()
+        p.standardInput = i; p.standardOutput = o; p.standardError = e
+        try p.run()
+        return HelperTransport.Channel(process: p, toHelper: i.fileHandleForWriting,
+                                       fromHelper: o.fileHandleForReading, stderr: e.fileHandleForReading)
+    }
+    #expect(throws: ScanError.helperNotAuthorised) { _ = try HelperTransport(launcher: launcher) }
+}

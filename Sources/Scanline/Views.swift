@@ -205,7 +205,7 @@ struct Thumb: View {
 
 struct HelperBanner: View {
     let model: AppModel
-    let kind: AppModel.HelperBannerKind
+    let kind: HelperBannerKind
 
     private var text: (title: String, body: String, button: String, canDismiss: Bool) {
         switch kind {

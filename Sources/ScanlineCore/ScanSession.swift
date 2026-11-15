@@ -1,8 +1,23 @@
 import Foundation
 
 /// What the session is doing, for the UI.
+/// Why the scanner isn't connected, when it's something the app can help with.
+public enum ConnectProblem: Sendable, Equatable {
+    case helperOutdated
+    case helperNotAuthorised
+    case other
+
+    public init(_ error: Error) {
+        switch error {
+        case ScanError.helperOutdated: self = .helperOutdated
+        case ScanError.helperNotAuthorised: self = .helperNotAuthorised
+        default: self = .other
+        }
+    }
+}
+
 public enum SessionState: Sendable, Equatable {
-    case disconnected(String)
+    case disconnected(String, problem: ConnectProblem = .other)
     case idle                                   // ready, no paper
     case countdown(seconds: Double)             // paper in, scan starts soon
     case paperWaiting                           // paper in, auto-scan off: waiting for the button
@@ -53,6 +68,7 @@ public final class ScanSession: @unchecked Sendable {
     private var running = false
     private var thread: Thread?
     private var finished: DispatchSemaphore?
+    private var _busy = false
     private let logURL: URL?
 
     public init(settings: Settings, logURL: URL? = ScanSession.defaultLogURL,
@@ -95,6 +111,24 @@ public final class ScanSession: @unchecked Sendable {
     /// Stops after the current step; the transport is closed on the worker thread.
     public func stop() { lock.withLock { running = false } }
 
+    /// True while the worker is feeding, scanning or processing a sheet (read on any thread;
+    /// unlike the UI state, it never lags the worker).
+    public var isBusy: Bool { lock.withLock { _busy } }
+
+    /// Undoes `stop()` if the worker hasn't finished yet: it carries on as if never stopped.
+    /// False if the worker already ended (start a new session instead).
+    @discardableResult
+    public func resume() -> Bool {
+        lock.withLock {
+            guard let done = finished, done.wait(timeout: .now()) == .timedOut else {
+                if let done = finished { done.signal() }   // put back the token we took
+                return false
+            }
+            running = true
+            return true
+        }
+    }
+
     /// Stops and waits until the worker has closed its transport (so a helper has let go of the
     /// scanner). False if it is still busy after `timeout`, e.g. in the middle of a scan.
     @discardableResult
@@ -129,10 +163,11 @@ public final class ScanSession: @unchecked Sendable {
             if s != lastState { lastState = s; onEvent(.state(s)) }
         }
         var lastWhy: String?
-        func disconnect(_ why: String) {
+        func disconnect(_ error: Error) {
             transport?.close(); transport = nil; scanner = nil
+            let why = "\(error)"
             if why != lastWhy { lastWhy = why; log("not connected: \(why)") }
-            emit(.disconnected(why))
+            emit(.disconnected(why, problem: ConnectProblem(error)))
         }
 
         while isRunning {
@@ -144,7 +179,7 @@ public final class ScanSession: @unchecked Sendable {
                     transport = t; scanner = s; phase = .idle; lastWhy = nil
                     log("connected")
                 } catch {
-                    disconnect("\(error)")
+                    disconnect(error)
                     // An outdated helper won't fix itself: retry slowly until it is updated.
                     if case ScanError.helperOutdated = error { pause(10) } else { pause(2) }
                     continue
@@ -187,7 +222,7 @@ public final class ScanSession: @unchecked Sendable {
             } catch {
                 log("error: \(error)")
                 onEvent(.problem(.error, "Scanner error: \(error)"))
-                disconnect("\(error)")
+                disconnect(error)
                 pause(1)
                 continue
             }
@@ -198,6 +233,8 @@ public final class ScanSession: @unchecked Sendable {
 
     /// One scan → process → save. Returns the next phase.
     private func scan(_ s: IRIScanExpress4, _ cfg: Settings, emit: (SessionState) -> Void) throws -> Phase {
+        lock.withLock { _busy = true }
+        defer { lock.withLock { _busy = false } }
         guard let folder = cfg.folder else {
             onEvent(.problem(.noFolder, "Choose a folder first."))
             return .removal("Choose a folder, then insert the sheet again.")

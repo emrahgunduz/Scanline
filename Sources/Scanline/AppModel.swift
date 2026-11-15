@@ -44,6 +44,8 @@ final class AppModel {
     /// Code hash of the bundled helper whose update banner the user dismissed.
     var helperUpdateDismissed: String? { didSet { if persistent { defaults.set(helperUpdateDismissed, forKey: "helperUpdateDismissed") } } }
     @ObservationIgnored private var bundledHelperHash: String?
+    /// Bumped by every status check and install; a check only applies if it is still the latest.
+    @ObservationIgnored private var helperStatusGeneration = 0
     private(set) var access: DeviceAccess = .none
     let library = FolderLibrary()
     let zoom = ZoomController()
@@ -86,41 +88,42 @@ final class AppModel {
     /// Re-checks the installed helper against the bundled one, off the main thread.
     func refreshHelperStatus() {
         guard simulator == nil else { return }
+        helperStatusGeneration += 1
+        let generation = helperStatusGeneration
         let bundled = bundledHelperURL
         Task.detached(priority: .utility) {
             let facts = HelperStatus.facts(bundled: bundled)
             let status = HelperStatus.classify(facts)
             await MainActor.run {
+                guard generation == self.helperStatusGeneration else { return }   // a newer result exists
                 self.bundledHelperHash = facts.bundledCodeHash
                 self.helperStatus = status
             }
         }
     }
 
-    enum HelperBannerKind: Equatable { case install, repair, secure, update, incompatible }
+    /// Why the scanner isn't connected, when it's a helper problem.
+    var connectProblem: ConnectProblem? {
+        if case .disconnected(_, let problem) = state, problem != .other { return problem }
+        return nil
+    }
 
     /// What the sidebar banner should offer, if anything.
     var helperBanner: HelperBannerKind? {
         guard simulator == nil else { return nil }
-        if case .disconnected(let why) = state, why.contains("out of date") { return .incompatible }
         let dismissed = bundledHelperHash != nil && helperUpdateDismissed == bundledHelperHash
-        switch helperStatus {
-        case .notInstalled?: return .install
-        case .ruleMissing?: return .repair
-        case .unpinned?: return dismissed ? nil : .secure
-        case .outdated?: return dismissed ? nil : .update
-        default: break
-        }
-        return access == .vendorDriver || access == .none ? .install : nil
+        return HelperBannerKind.decide(status: helperStatus, problem: connectProblem,
+                                       needsAccess: access == .vendorDriver || access == .none, dismissed: dismissed)
     }
 
     func dismissHelperBanner() { helperUpdateDismissed = bundledHelperHash }
 
     /// Busy with paper: installing now would cut a scan short.
     var scannerBusy: Bool {
+        if session?.isBusy == true { return true }
         switch state {
-        case .countdown, .scanning, .processing: true
-        default: false
+        case .countdown, .scanning, .processing: return true
+        default: return false
         }
     }
 
@@ -154,7 +157,7 @@ final class AppModel {
                 do { return try HelperTransport() }
                 catch {
                     // Not authorised yet (or broken): keep scanning through the vendor driver if it's there.
-                    if "\(error)".contains("not authorised"), Self.vendorDriverLoaded() { return try AvKernelTransport() }
+                    if case ScanError.helperNotAuthorised = error, Self.vendorDriverLoaded() { return try AvKernelTransport() }
                     throw error
                 }
             case .vendorDriver: return try AvKernelTransport()
@@ -216,11 +219,15 @@ final class AppModel {
 
     var activity: Activity {
         switch state {
-        case .disconnected(let why) where why.contains("out of date"):
+        case .disconnected(_, .helperOutdated):
             return Activity(title: "Scanner helper needs an update",
                             detail: "This version of Scanline needs a newer helper. Update it below; you'll be asked for your password once.",
                             color: 0x868B9C, icon: .symbol("arrow.triangle.2.circlepath"), step: 0)
-        case .disconnected(let why):
+        case .disconnected(_, .helperNotAuthorised):
+            return Activity(title: "Scanner helper needs a repair",
+                            detail: "macOS won't start the helper for this account. Repair it below; you'll be asked for your password once.",
+                            color: 0x868B9C, icon: .symbol("wrench.and.screwdriver"), step: 0)
+        case .disconnected(let why, _):
             let detail = why.contains("Capture Tool") ? "Capture Tool is open. Quit it to use Scanline."
                 : why.contains("Install the Scanline helper") ? "Install the Scanline helper (below) to connect the scanner."
                 : why.contains("not found") && !why.contains("interface") ? "Plug in the IRIScan Express 4. Scanline reconnects on its own."
@@ -345,7 +352,8 @@ final class AppModel {
         }
         // Let the running helper release the scanner before it is replaced.
         if let session, !session.stopAndWait(timeout: 5) {
-            startSession()
+            // Still mid-scan: let that same worker carry on rather than starting a second one.
+            if !session.resume() { startSession() }
             errorMessage = "The scanner is busy. Try again in a moment."; return
         }
         let updating = helperStatus != .notInstalled && helperStatus != nil
@@ -356,7 +364,10 @@ final class AppModel {
         if let err, !cancelled {
             errorMessage = "Installing the helper failed: \(err[NSAppleScript.errorMessage] ?? err)"
         }
-        let after = HelperStatus.classify(HelperStatus.facts(bundled: bin))
+        helperStatusGeneration += 1          // any check started before the install is now stale
+        let afterFacts = HelperStatus.facts(bundled: bin)
+        let after = HelperStatus.classify(afterFacts)
+        bundledHelperHash = afterFacts.bundledCodeHash
         helperStatus = after
         if err == nil, after != .current {
             errorMessage = "The helper was installed, but Scanline still can't confirm it (\(after)). Try Reinstall Helper in Settings."
