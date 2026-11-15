@@ -1,4 +1,5 @@
 import AppKit
+import Quartz
 import ScanlineCore
 import SwiftUI
 
@@ -12,7 +13,7 @@ struct ScanlineApp: App {
             MainView(model: model)
                 .frame(minWidth: 760, minHeight: 520)
                 .tint(Theme.accent)
-                .onAppear { model.applyAppearance() }
+                .onAppear { model.applyAppearance(); delegate.model = model }
         }
         .defaultSize(width: 1240, height: 820)
         .windowToolbarStyle(.unified)
@@ -20,6 +21,28 @@ struct ScanlineApp: App {
             CommandGroup(replacing: .newItem) {
                 Button("Select Folder…") { model.chooseFolder() }.keyboardShortcut("o")
                 Button("Open Folder in Finder") { model.openFolder() }.keyboardShortcut("o", modifiers: [.command, .shift])
+                Divider()
+                // No bare Return/Space here: a menu key equivalent would take them from the rename field.
+                Button("Rename (Return)") { model.beginRename() }
+                    .disabled(model.selectedFile == nil || model.renaming != nil)
+                Button("Show in Finder") { model.revealSelected() }
+                    .disabled(model.selectedFile == nil)
+                // Disabled while renaming, or ⌘⌫ would trash the file instead of editing the name.
+                Button("Move to Trash") { model.trashSelected() }
+                    .keyboardShortcut(.delete, modifiers: .command)
+                    .disabled(model.selectedFile == nil || model.renaming != nil)
+            }
+            CommandMenu("Image") {
+                Button(model.quickLookURL == nil ? "Quick Look" : "Close Quick Look") { model.toggleQuickLook() }
+                    .keyboardShortcut("y")
+                    .disabled(model.selectedFile == nil || model.renaming != nil)
+                Divider()
+                Group {
+                    Button("Rotate Left") { model.rotateSelected(.left) }.keyboardShortcut("l")
+                    Button("Rotate Right") { model.rotateSelected(.right) }.keyboardShortcut("r")
+                    Button("Rotate 180°") { model.rotateSelected(.upsideDown) }
+                }
+                .disabled(model.selectedFile == nil || model.renaming != nil)
             }
             CommandMenu("Scan") {
                 Button("Scan Now") { model.scanNow() }.keyboardShortcut(.return, modifiers: .command)
@@ -62,8 +85,25 @@ struct ScanlineApp: App {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    weak var model: AppModel?
+    private var keyMonitor: Any?
+
     func applicationWillFinishLaunching(_ notification: Notification) {
         signal(SIGPIPE, SIG_IGN)   // writes to a closed helper pipe return an error instead of killing the app
+    }
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // The Quick Look panel takes keyboard focus; like Finder, let ↑/↓ there move the scan list
+        // (the panel follows the selection). ←/→ are the panel's own and already sync back.
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard NSApp.keyWindow is QLPreviewPanel, let model = self?.model,
+                  event.modifierFlags.intersection([.command, .option, .control]).isEmpty else { return event }
+            switch event.keyCode {
+            case 125: model.selectAdjacent(1); return nil     // ↓
+            case 126: model.selectAdjacent(-1); return nil    // ↑
+            default: return event
+            }
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }

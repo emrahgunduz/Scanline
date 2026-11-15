@@ -1,4 +1,5 @@
 import ScanlineCore
+import QuickLook
 import SwiftUI
 
 struct MainView: View {
@@ -112,45 +113,83 @@ struct FileListView: View {
     @Bindable var model: AppModel
     @State private var draft = ""
     @FocusState private var renameFocused: Bool
+    @FocusState private var listFocused: Bool
 
     var body: some View {
+        keyed(list)
+            .quickLookPreview($model.quickLookURL, in: model.library.files.map(\.url))
+            .onChange(of: model.quickLookURL) { _, url in quickLookChanged(url) }
+            .onChange(of: model.selection) { _, url in if model.quickLookURL != nil { model.quickLookURL = url } }
+            .onChange(of: model.renaming) { _, url in renamingChanged(url) }
+            .onChange(of: model.listFocusRequest) { listFocused = true }
+            .onAppear { listFocused = true }
+    }
+
+    private var list: some View {
         List(selection: $model.selection) {
             ForEach(model.library.files) { file in
-                row(file).tag(file.url)
-                    .contextMenu {
-                        Button("Open") { NSWorkspace.shared.open(file.url) }
-                        Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([file.url]) }
-                        Divider()
-                        Button("Rename") { startRename(file) }
-                        Menu("Rotate") {
-                            Button("Rotate Left (90°)") { model.rotate(file, .left) }
-                            Button("Rotate Right (90°)") { model.rotate(file, .right) }
-                            Button("Rotate 180°") { model.rotate(file, .upsideDown) }
-                        }
-                        Button("Move to Trash", role: .destructive) { model.trash(file) }
-                    }
+                row(file).tag(file.url).contextMenu { menu(file) }
             }
         }
         .listStyle(.sidebar)
-        .onDeleteCommand { if let f = selectedFile { model.trash(f) } }
-        .overlay {
-            if model.folder == nil {
-                ContentUnavailableView("No folder", systemImage: "folder.badge.questionmark",
-                                       description: Text("Choose where scans are saved."))
-            } else if model.library.files.isEmpty {
-                ContentUnavailableView("No scans yet", systemImage: "doc.viewfinder",
-                                       description: Text("Insert a receipt to start."))
-            }
+        .focused($listFocused)
+        .onDeleteCommand { model.trashSelected() }
+        .overlay { placeholder }
+    }
+
+    /// Finder keys on the list; typing in the rename field and ⌘-shortcuts pass through.
+    private func keyed(_ content: some View) -> some View {
+        content
+            .onKeyPress(keys: [.space], phases: .down) { press in listKey(press) { model.toggleQuickLook() } }
+            .onKeyPress(keys: [.return], phases: .down) { press in listKey(press) { model.beginRename() } }
+    }
+
+    private func listKey(_ press: KeyPress, _ action: () -> Void) -> KeyPress.Result {
+        guard model.renaming == nil, press.modifiers.isEmpty, model.selectedFile != nil else { return .ignored }
+        action()
+        return .handled
+    }
+
+    private func quickLookChanged(_ url: URL?) {
+        if let url { if model.selection != url { model.selection = url } } else { listFocused = true }
+    }
+
+    private func renamingChanged(_ url: URL?) {
+        if let url, let f = model.library.files.first(where: { $0.url == url }) {
+            draft = (f.name as NSString).deletingPathExtension
+            renameFocused = true
+        } else {
+            listFocused = true
         }
     }
 
-    private var selectedFile: ScanFile? { model.library.files.first { $0.url == model.selection } }
+    @ViewBuilder private func menu(_ file: ScanFile) -> some View {
+        Button("Open") { NSWorkspace.shared.open(file.url) }
+        Button("Quick Look") { model.selection = file.url; model.quickLookURL = file.url }
+        Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([file.url]) }
+        Divider()
+        Button("Rename") { startRename(file) }
+        Menu("Rotate") {
+            Button("Rotate Left (90°)") { model.rotate(file, .left) }
+            Button("Rotate Right (90°)") { model.rotate(file, .right) }
+            Button("Rotate 180°") { model.rotate(file, .upsideDown) }
+        }
+        Button("Move to Trash", role: .destructive) { model.trash(file) }
+    }
+
+    @ViewBuilder private var placeholder: some View {
+        if model.folder == nil {
+            ContentUnavailableView("No folder", systemImage: "folder.badge.questionmark",
+                                   description: Text("Choose where scans are saved."))
+        } else if model.library.files.isEmpty {
+            ContentUnavailableView("No scans yet", systemImage: "doc.viewfinder",
+                                   description: Text("Insert a receipt to start."))
+        }
+    }
 
     private func startRename(_ file: ScanFile) {
-        draft = (file.name as NSString).deletingPathExtension
         model.selection = file.url
-        model.renaming = file.url
-        renameFocused = true
+        model.beginRename()
     }
 
     @ViewBuilder private func row(_ file: ScanFile) -> some View {
@@ -173,14 +212,15 @@ struct FileListView: View {
             Spacer(minLength: 0)
             if model.selection == file.url && model.renaming != file.url {
                 Button { startRename(file) } label: { Image(systemName: "pencil") }
-                    .buttonStyle(.borderless).foregroundStyle(Theme.accentText).help("Rename")
+                    .buttonStyle(.borderless).foregroundStyle(Theme.accentText).help("Rename (Return)")
                     .accessibilityLabel("Rename")
                 Button { model.trash(file) } label: { Image(systemName: "trash") }
-                    .buttonStyle(.borderless).foregroundStyle(Theme.danger).help("Move to Trash")
+                    .buttonStyle(.borderless).foregroundStyle(Theme.danger).help("Move to Trash (⌘⌫)")
                     .accessibilityLabel("Move to Trash")
             }
         }
         .padding(.vertical, 3)
+        .accessibilityAction(named: "Quick Look") { model.selection = file.url; model.quickLookURL = file.url }
     }
 }
 
@@ -266,7 +306,7 @@ struct DetailView: View {
         .frame(minWidth: 460, minHeight: 420, maxHeight: .infinity, alignment: .top)
     }
 
-    private var selected: ScanFile? { model.library.files.first { $0.url == model.selection } }
+    private var selected: ScanFile? { model.selectedFile }
 
     private var header: some View {
         HStack(spacing: 10) {
@@ -288,9 +328,9 @@ struct DetailView: View {
                 Spacer()
                 HStack(spacing: 10) {
                     Button { model.rotate(f, .left) } label: { Image(systemName: "rotate.left") }
-                        .help("Rotate Left (90°)").accessibilityLabel("Rotate left")
+                        .help("Rotate Left (⌘L)").accessibilityLabel("Rotate left")
                     Button { model.rotate(f, .right) } label: { Image(systemName: "rotate.right") }
-                        .help("Rotate Right (90°)").accessibilityLabel("Rotate right")
+                        .help("Rotate Right (⌘R)").accessibilityLabel("Rotate right")
                     Button { model.rotate(f, .upsideDown) } label: { Image(systemName: "arrow.up.arrow.down") }
                         .help("Rotate 180°").accessibilityLabel("Rotate 180 degrees")
                 }

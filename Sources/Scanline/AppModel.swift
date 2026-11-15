@@ -33,6 +33,12 @@ final class AppModel {
     var outcome: Outcome?
     var selection: URL?
     var renaming: URL?
+    /// The scan shown in Quick Look. Separate from `selection`: closing the panel sets it to nil.
+    var quickLookURL: URL?
+    /// Bumped to ask the scan list to take keyboard focus again.
+    var listFocusRequest = 0
+
+    var selectedFile: ScanFile? { library.files.first { $0.url == selection } }
     var undo: (trashed: URL, original: URL)?
     var errorMessage: String?
     /// Bumped when the selected image changes on disk (forces the viewer to reload).
@@ -308,6 +314,8 @@ final class AppModel {
                 selection = rest.isEmpty ? nil : rest[min(i, rest.count - 1)].url
             }
         } catch { errorMessage = error.localizedDescription }
+        if selection == nil { quickLookURL = nil }
+        listFocusRequest += 1
     }
 
     func undoTrash() {
@@ -315,6 +323,43 @@ final class AppModel {
         do { try library.restore(from: u.trashed, to: u.original); selection = u.original }
         catch { errorMessage = error.localizedDescription }
         undo = nil
+        listFocusRequest += 1
+    }
+
+    // MARK: Selection actions (menus, keys and buttons share these)
+
+    func toggleQuickLook() {
+        guard selectedFile != nil, renaming == nil else { quickLookURL = nil; return }
+        quickLookURL = quickLookURL == nil ? selection : nil
+    }
+
+    /// Moves the selection up (-1) or down (+1) the list, staying at the ends.
+    func selectAdjacent(_ step: Int) {
+        let files = library.files
+        guard !files.isEmpty else { return }
+        guard let i = files.firstIndex(where: { $0.url == selection }) else { selection = files.first?.url; return }
+        selection = files[max(0, min(files.count - 1, i + step))].url
+    }
+
+    func beginRename() {
+        guard let f = selectedFile else { return }
+        quickLookURL = nil
+        renaming = f.url
+    }
+
+    func trashSelected() {
+        guard let f = selectedFile, renaming == nil else { return }
+        trash(f)
+    }
+
+    func rotateSelected(_ turn: Orientation.Turn) {
+        guard let f = selectedFile, renaming == nil else { return }
+        rotate(f, turn)
+    }
+
+    func revealSelected() {
+        guard let f = selectedFile else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([f.url])
     }
 
     func rotate(_ file: ScanFile, _ turn: Orientation.Turn) {
