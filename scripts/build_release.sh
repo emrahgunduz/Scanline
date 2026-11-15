@@ -25,6 +25,17 @@ lipo -archs "$app/Contents/MacOS/Scanline" | grep -q arm64 || { echo "not arm64"
 codesign --verify --strict "$app/Contents/Resources/ScanlineHelper"
 codesign --verify --strict "$app"
 
+# The helper links only the USB layer, so app-only changes don't change its bytes.
+helper="$app/Contents/Resources/ScanlineHelper"
+if otool -L "$helper" | grep -qE 'Vision|ImageIO|CoreGraphics'; then
+  echo "helper links image frameworks" >&2; exit 1
+fi
+# Smoke test without a scanner: no argument -> usage (64); hello then close over stdio.
+rc=0; "$helper" >/dev/null 2>&1 || rc=$?
+[[ $rc == 64 ]] || { echo "helper without --stdio exited $rc, expected 64" >&2; exit 1; }
+reply=$(printf '\x04\x03' | "$helper" --stdio 2>/dev/null | xxd -p | tr -d '\n')
+[[ $reply == 0004000000????????0000000000 ]] || { echo "helper hello/close reply unexpected: $reply" >&2; exit 1; }
+
 dsymutil "$app/Contents/MacOS/Scanline" -o "$out/Scanline.app.dSYM" 2>/dev/null || true
 (cd "$out" && ditto -c -k --keepParent Scanline.app Scanline.zip)
 echo "Scanline $SCANLINE_VERSION ($SCANLINE_BUILD) -> $out/Scanline.zip"

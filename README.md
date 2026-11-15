@@ -123,7 +123,8 @@ sudo .build/release/scanprobe scan out.pgm --usb
 | Path | What |
 |---|---|
 | `Sources/Scanline` | The SwiftUI app |
-| `Sources/ScanlineCore` | Scanner protocol, transports, image processing, scan session |
+| `Sources/ScanlineCore` | Scanner protocol, helper client, kext transport, image processing, scan session |
+| `Sources/ScanlineUSB` | USB transport and the helper's wire protocol and request loop (all the helper links) |
 | `Sources/CUSBHost` | Small Objective-C wrapper over IOUSBHost (device capture, bulk pipes) |
 | `Sources/ScanlineHelper` | The privileged helper |
 | `Sources/scanprobe` | Command-line probe |
