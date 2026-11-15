@@ -23,7 +23,7 @@ enum DeviceAccess: Equatable { case helper, vendorDriver, simulator, none }
 @MainActor @Observable
 final class AppModel {
     // Settings (persisted)
-    var folder: URL? { didSet { persist(); library.watch(folder); pushSettings() } }
+    var folder: URL? { didSet { renaming = nil; quickLookURL = nil; persist(); library.watch(folder); pushSettings() } }
     var autoScan: Bool { didSet { persist(); pushSettings() } }
     var autoScanDelay: Double { didSet { persist(); pushSettings() } }
     var appearance: Appearance { didSet { persist(); applyAppearance() } }
@@ -33,6 +33,16 @@ final class AppModel {
     var outcome: Outcome?
     var selection: URL?
     var renaming: URL?
+    /// The scan shown in Quick Look. Separate from `selection`: closing the panel sets it to nil.
+    var quickLookURL: URL?
+    /// Bumped to ask the scan list to take keyboard focus again.
+    var listFocusRequest = 0
+
+    var selectedFile: ScanFile? { library.files.first { $0.url == selection } }
+
+    /// True only while the selected row's name field is open. Keys and menus that act on the
+    /// file stand down then, so they don't take keystrokes meant for the field.
+    var isRenaming: Bool { renaming != nil && renaming == selection && selectedFile != nil }
     var undo: (trashed: URL, original: URL)?
     var errorMessage: String?
     /// Bumped when the selected image changes on disk (forces the viewer to reload).
@@ -301,6 +311,7 @@ final class AppModel {
     func trash(_ file: ScanFile) {
         let files = library.files
         let i = files.firstIndex(of: file) ?? 0
+        if renaming == file.url { renaming = nil }
         do {
             if let t = try library.trash(file) { undo = (t, file.url) }
             if selection == file.url {
@@ -308,6 +319,8 @@ final class AppModel {
                 selection = rest.isEmpty ? nil : rest[min(i, rest.count - 1)].url
             }
         } catch { errorMessage = error.localizedDescription }
+        if selection == nil { quickLookURL = nil }
+        listFocusRequest += 1
     }
 
     func undoTrash() {
@@ -315,6 +328,43 @@ final class AppModel {
         do { try library.restore(from: u.trashed, to: u.original); selection = u.original }
         catch { errorMessage = error.localizedDescription }
         undo = nil
+        listFocusRequest += 1
+    }
+
+    // MARK: Selection actions (menus, keys and buttons share these)
+
+    func toggleQuickLook() {
+        guard selectedFile != nil, !isRenaming else { quickLookURL = nil; return }
+        quickLookURL = quickLookURL == nil ? selection : nil
+    }
+
+    /// Moves the selection up (-1) or down (+1) the list, staying at the ends.
+    func selectAdjacent(_ step: Int) {
+        let files = library.files
+        guard !files.isEmpty else { return }
+        guard let i = files.firstIndex(where: { $0.url == selection }) else { selection = files.first?.url; return }
+        selection = files[max(0, min(files.count - 1, i + step))].url
+    }
+
+    func beginRename() {
+        guard let f = selectedFile else { return }
+        quickLookURL = nil
+        renaming = f.url
+    }
+
+    func trashSelected() {
+        guard let f = selectedFile, !isRenaming else { return }
+        trash(f)
+    }
+
+    func rotateSelected(_ turn: Orientation.Turn) {
+        guard let f = selectedFile, !isRenaming else { return }
+        rotate(f, turn)
+    }
+
+    func revealSelected() {
+        guard let f = selectedFile else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([f.url])
     }
 
     func rotate(_ file: ScanFile, _ turn: Orientation.Turn) {
