@@ -48,7 +48,8 @@ driver and a recorded scan; see [docs/protocol.md](docs/protocol.md).
 
 1. Download `Scanline-<version>.zip` from [Releases](../../releases) and unzip it.
    To check the download: `shasum -a 256 -c Scanline-<version>.zip.sha256`
-2. Scanline isn't notarized yet, so macOS blocks it the first time. Either run
+2. Releases that say *notarized* in their notes open normally. Older releases (v1.0.1 and
+   earlier) aren't notarized, so macOS blocks them the first time. Either run
    `xattr -dr com.apple.quarantine Scanline.app`, or open it once, then allow it in
    **System Settings › Privacy & Security › Open Anyway**.
 3. Move **Scanline.app** to Applications and open it.
@@ -102,8 +103,10 @@ Scanline needs neither, so this is safe to do once you're happy with it.
 
 ## Building from source
 
-Xcode 26 (Swift 6) on an Apple Silicon Mac. No Apple Developer account is needed; builds are
-ad-hoc signed.
+Xcode 26 (Swift 6) on an Apple Silicon Mac. No Apple Developer account is needed: without one,
+builds are ad-hoc signed. If a **Developer ID Application** identity is in your keychain, the build
+scripts use it automatically (hardened runtime, secure timestamp); `SCANLINE_SIGN_IDENTITY=-`
+forces ad-hoc, or set it to a specific identity.
 
 ```bash
 swift build                    # debug build of everything
@@ -111,7 +114,11 @@ swift test                     # unit tests (no scanner needed)
 scripts/build-app.sh           # build/Scanline.app
 scripts/build_release.sh       # build/Release/: checked Scanline.app, Scanline.zip, dSYM
 scripts/install-local.sh       # release build -> /Applications, Desktop alias, launch
+scripts/build_release.sh --notarize   # Developer ID only: notarize and staple before zipping
 ```
+
+`--notarize` uses the notarytool profile `scanline-notary` (or `NOTARY_PROFILE`), saved once with
+`xcrun notarytool store-credentials scanline-notary`.
 
 Run against a simulated scanner (adds a **Simulator** menu; settings are not saved):
 
@@ -128,6 +135,24 @@ sudo .build/release/scanprobe scan out.pgm --usb
 .build/release/scanprobe process in.pgm out.jpg   # image pipeline only
 ```
 
+### Signing and notarization (maintainers)
+
+Releases are notarized when the repository holds these Actions secrets (Settings › Secrets and
+variables › Actions); with none of them set, releases stay ad-hoc signed, and with only some set
+the release fails:
+
+| Secret | Holds |
+|---|---|
+| `DEVELOPER_ID_P12` | The Developer ID Application certificate and its private key, exported as .p12, base64-encoded |
+| `DEVELOPER_ID_P12_PASSWORD` | The password chosen when exporting that .p12 |
+| `NOTARY_KEY_P8` | An App Store Connect API key (.p8 file contents, with the BEGIN/END lines) |
+| `NOTARY_KEY_ID` | That key's ID |
+| `NOTARY_ISSUER_ID` | The App Store Connect issuer ID |
+
+The release job imports them into a temporary keychain, signs, notarizes, staples, checks the app
+with `spctl`, and deletes the keychain and key afterwards. CI runs never see them. The first
+Developer ID release changes the helper's signature, so Scanline asks once to update the helper.
+
 ### Layout
 
 | Path | What |
@@ -141,6 +166,7 @@ sudo .build/release/scanprobe scan out.pgm --usb
 | `Tests/ScanlineCoreTests` | Protocol bytes, simulator, session, image pipeline tests |
 | `tools/icon` | Renders the app icon |
 | `docs/` | Protocol notes and design decisions |
+| `scripts/` | Build, release, signing (`signing.sh`), notarization (`notarize.sh`) and local install |
 
 ## Uninstalling
 
