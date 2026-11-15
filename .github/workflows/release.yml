@@ -88,6 +88,8 @@ jobs:
           curl -fsSLo "$RUNNER_TEMP/DeveloperIDG2CA.cer" https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
           security import "$RUNNER_TEMP/DeveloperIDG2CA.cer" -k "$KC" || true
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KCPW" "$KC" > /dev/null
+          # Prepend ours to the search list; the runner's keychain paths have no spaces.
+          # shellcheck disable=SC2046
           security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
           (umask 077; printf '%s\n' "$NOTARY_KEY_P8" > "$RUNNER_TEMP/AuthKey.p8")
           IDENTITY=$(security find-identity -v -p codesigning "$KC" | awk '/"Developer ID Application: / { print $2; exit }')
