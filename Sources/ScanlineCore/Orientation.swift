@@ -58,7 +58,7 @@ public enum Orientation {
     static let keywords: Set<String> = ["TOPLAM", "TOPKDV", "KDV", "TARIH", "SAAT", "FIS", "TOTAL", "KREDI", "NAKIT",
                                         "TUTAR", "ADET", "KART", "TESEKKUR", "SATIS", "TL", "NO", "VD", "KASIYER",
                                         "TAX", "DATE", "TIME", "CASH", "CARD", "THANK", "RECEIPT", "SUBTOTAL"]
-    nonisolated(unsafe) static let patterns: [NSRegularExpression] = [
+    static let patterns: [NSRegularExpression] = [
         #"\d+[.,]\d{2}(?!\d)"#,                // prices: 260,00
         #"\b\d{2}[./-]\d{2}[./-]\d{4}\b"#,     // dates: 04/11/2026
         #"\b\d{2}:\d{2}"#,                     // times: 13:53

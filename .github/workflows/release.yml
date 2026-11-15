@@ -39,7 +39,7 @@ jobs:
       # The commit to build: the one CI tested, or the chosen branch's commit when started by hand.
       COMMIT: ${{ github.event.workflow_run.head_sha || github.sha }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ env.COMMIT }}
           fetch-depth: 0
