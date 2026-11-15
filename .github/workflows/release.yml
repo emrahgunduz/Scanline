@@ -5,6 +5,11 @@
 # releasing the commit CI tested. CI runs on other branches, or failed ones, release nothing.
 # It can also be started by hand: Actions -> Release -> Run workflow.
 #
+# Signing: when the five signing secrets are set (see README, "Signing and notarization"), the
+# app is signed with Developer ID, notarized and stapled; with none set it is ad-hoc signed, as
+# before. Some but not all set fails the job. The secrets live in the "release" environment, so
+# they can be limited to main and protected with required reviewers.
+#
 # Version: 1.0.<run number>, where the run number counts this workflow's runs (skipped runs
 # count too, so numbers can jump). The release and its tag (v1.0.<n>) are created on that commit.
 name: Release
@@ -32,7 +37,8 @@ jobs:
     # After CI only when it passed (a failed or cancelled CI run releases nothing).
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: macos-26
-    timeout-minutes: 45
+    environment: release
+    timeout-minutes: 60
     env:
       VERSION: 1.0.${{ github.run_number }}
       TAG: v1.0.${{ github.run_number }}
@@ -47,12 +53,70 @@ jobs:
         with:
           xcode-version: latest-stable
 
+      - name: Signing setup
+        id: signing
+        env:
+          DEVELOPER_ID_P12: ${{ secrets.DEVELOPER_ID_P12 }}
+          DEVELOPER_ID_P12_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
+          NOTARY_KEY_P8: ${{ secrets.NOTARY_KEY_P8 }}
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          missing=()
+          for name in DEVELOPER_ID_P12 DEVELOPER_ID_P12_PASSWORD NOTARY_KEY_P8 NOTARY_KEY_ID NOTARY_ISSUER_ID; do
+            [[ -n "${!name}" ]] || missing+=("$name")
+          done
+          if [[ ${#missing[@]} -eq 5 ]]; then
+            echo "No signing secrets: ad-hoc build."
+            echo "mode=adhoc" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ ${#missing[@]} -gt 0 ]]; then
+            # A signed but unnotarized app is still blocked by Gatekeeper: don't publish one.
+            echo "::error::Signing secrets incomplete; missing: ${missing[*]}"
+            exit 1
+          fi
+          KC="$RUNNER_TEMP/signing.keychain-db"
+          KCPW=$(openssl rand -base64 24)
+          security create-keychain -p "$KCPW" "$KC"
+          security set-keychain-settings -lut 21600 "$KC"
+          security unlock-keychain -p "$KCPW" "$KC"
+          (umask 077; printf '%s' "$DEVELOPER_ID_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12")
+          security import "$RUNNER_TEMP/cert.p12" -k "$KC" -P "$DEVELOPER_ID_P12_PASSWORD" -f pkcs12 -T /usr/bin/codesign
+          rm -f "$RUNNER_TEMP/cert.p12"
+          # The Developer ID intermediate; codesign can't build the chain without it.
+          curl -fsSLo "$RUNNER_TEMP/DeveloperIDG2CA.cer" https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
+          security import "$RUNNER_TEMP/DeveloperIDG2CA.cer" -k "$KC" || true
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KCPW" "$KC" > /dev/null
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
+          (umask 077; printf '%s\n' "$NOTARY_KEY_P8" > "$RUNNER_TEMP/AuthKey.p8")
+          IDENTITY=$(security find-identity -v -p codesigning "$KC" | awk '/"Developer ID Application: / { print $2; exit }')
+          [[ -n "$IDENTITY" ]] || { echo "::error::No Developer ID Application identity in DEVELOPER_ID_P12"; exit 1; }
+          {
+            echo "SCANLINE_SIGN_IDENTITY=$IDENTITY"
+            echo "NOTARY_KEY_PATH=$RUNNER_TEMP/AuthKey.p8"
+            echo "NOTARY_KEY_ID=$NOTARY_KEY_ID"
+            echo "NOTARY_ISSUER_ID=$NOTARY_ISSUER_ID"
+          } >> "$GITHUB_ENV"
+          echo "mode=notarized" >> "$GITHUB_OUTPUT"
+
       - name: Build, zip and check the app
-        run: APP_VERSION="$VERSION" APP_BUILD="${{ github.run_number }}" scripts/build_release.sh --clean
+        env:
+          MODE: ${{ steps.signing.outputs.mode }}
+        run: |
+          if [[ "$MODE" == notarized ]]; then
+            APP_VERSION="$VERSION" APP_BUILD="${{ github.run_number }}" scripts/build_release.sh --clean --notarize
+          else
+            # Ad-hoc on purpose: a stray identity on the runner must never give a signed but
+            # unnotarized release.
+            SCANLINE_SIGN_IDENTITY=- APP_VERSION="$VERSION" APP_BUILD="${{ github.run_number }}" scripts/build_release.sh --clean
+          fi
 
       - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}
+          MODE: ${{ steps.signing.outputs.mode }}
         run: |
           cd build/Release
           # Asset names without spaces; the checksum file names the zip exactly as published,
@@ -62,16 +126,30 @@ jobs:
           mv Scanline.zip "$ZIP"
           shasum -a 256 "$ZIP" > "$ZIP.sha256"
           ditto -c -k --keepParent Scanline.app.dSYM "$DSYM"
+          if [[ "$MODE" == notarized ]]; then
+            [[ -f NOTARIZED ]] || { echo "::error::notarized mode but no NOTARIZED marker"; exit 1; }
+            STEP2="2. Scanline is signed with Developer ID and notarized by Apple, so it opens normally."
+          else
+            STEP2="2. The app isn't notarized, so macOS blocks it the first time. Run once:
+             \`xattr -dr com.apple.quarantine Scanline.app\`
+             or allow it in System Settings: see [Installing](https://github.com/${{ github.repository }}#installing) in the README."
+          fi
           cat > notes.md <<NOTES
           **Scanline ${TAG}** for Apple Silicon Macs (macOS 26 or later) and the IRIScan Express 4.
 
           1. Download \`${ZIP}\` and unzip it. To check it: \`shasum -a 256 -c ${ZIP}.sha256\`
-          2. The app isn't notarized, so macOS blocks it the first time. Run once:
-             \`xattr -dr com.apple.quarantine Scanline.app\`
-             or allow it in System Settings: see [Installing](https://github.com/${{ github.repository }}#installing) in the README.
+          ${STEP2}
           3. Move Scanline.app to Applications and open it, then click **Install Helper…** once (asks for your password).
 
           SHA-256: \`$(cut -d' ' -f1 "$ZIP.sha256")\`
           NOTES
           gh release create "$TAG" --target "$COMMIT" --title "Scanline ${TAG}" --notes-file notes.md \
             "$ZIP" "$ZIP.sha256" "$DSYM"
+
+      - name: Remove signing material
+        if: always()
+        run: |
+          if [[ -f "$RUNNER_TEMP/signing.keychain-db" ]]; then
+            security delete-keychain "$RUNNER_TEMP/signing.keychain-db" || true
+          fi
+          rm -f "$RUNNER_TEMP/AuthKey.p8" "$RUNNER_TEMP/cert.p12" "$RUNNER_TEMP/DeveloperIDG2CA.cer"

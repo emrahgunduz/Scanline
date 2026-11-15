@@ -1,9 +1,12 @@
 #!/bin/zsh
-# Builds build/Scanline.app (release, ad-hoc signed; no Apple Developer account needed).
+# Builds build/Scanline.app (release). Ad-hoc signed unless a Developer ID identity is available
+# (see scripts/signing.sh); then signed with hardened runtime and a secure timestamp.
 # The privileged helper ships inside the app and is installed from the app on first use.
 set -euo pipefail
 root=${0:A:h:h}
 cd "$root"
+source scripts/signing.sh
+identity=$(resolve_identity)
 swift build -c release --product Scanline
 swift build -c release --product ScanlineHelper
 bin=$(swift build -c release --show-bin-path)
@@ -51,6 +54,18 @@ cat > "$app/Contents/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
-codesign --force --sign - "$app/Contents/Resources/ScanlineHelper"
-codesign --force --sign - "$app"
+helper="$app/Contents/Resources/ScanlineHelper"
+if is_developer_id "$identity"; then
+  # Inside out, no --deep: the helper carries its own Developer ID signature (notarization
+  # checks every Mach-O), then the app seals it. --timestamp fails loudly if Apple's
+  # timestamp server can't be reached; an unstamped signature would be rejected anyway.
+  echo "Signing with Developer ID: $identity" >&2
+  codesign --force --timestamp --options runtime --identifier local.scanline.helper --sign "$identity" "$helper"
+  codesign --force --timestamp --options runtime --entitlements Resources/Scanline.entitlements --sign "$identity" "$app"
+else
+  # Ad-hoc. Unchanged on purpose: the helper's code hash (and so the installed-helper check)
+  # stays the same as earlier builds.
+  codesign --force --sign - "$helper"
+  codesign --force --sign - "$app"
+fi
 echo "$app"
