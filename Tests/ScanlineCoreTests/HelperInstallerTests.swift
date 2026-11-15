@@ -46,9 +46,11 @@ private struct Sandbox {
         paths = p
     }
 
-    func install(expected: String? = nil) throws -> (status: Int32, err: String) {
+    func install(expected: String? = nil, visudo: String? = nil) throws -> (status: Int32, err: String) {
+        var paths = paths
+        if let visudo { paths.visudo = visudo }
         let digest = try expected ?? HelperInstaller.sha256Hex(of: bundled)
-        let script = try HelperInstaller.script(bundledHelper: bundled.path, expectedDigest: digest, user: NSUserName(), paths: paths)
+        let script = try HelperInstaller.script(bundledHelper: bundled.path, expectedDigest: digest, uid: getuid(), paths: paths)
         let r = try run("/bin/sh", ["-c", script])
         return (r.status, r.err)
     }
@@ -71,8 +73,8 @@ private func perms(_ path: String) -> Int {
 
 @Test func thePinnedRuleParsesWithTheRealVisudo() throws {
     let digest = String(repeating: "ab", count: 32)
-    let rule = try HelperInstaller.rule(user: NSUserName(), digest: digest)
-    #expect(rule == "\(NSUserName()) ALL=(root) NOPASSWD: sha256:\(digest) /Library/PrivilegedHelperTools/local.scanline.helper --stdio\n")
+    let rule = try HelperInstaller.rule(uid: getuid(), digest: digest)
+    #expect(rule == "#\(getuid()) ALL=(root) NOPASSWD: sha256:\(digest) /Library/PrivilegedHelperTools/local.scanline.helper --stdio\n")
     let file = FileManager.default.temporaryDirectory.appendingPathComponent("rule-\(UUID().uuidString)")
     defer { try? FileManager.default.removeItem(at: file) }
     try rule.write(to: file, atomically: true, encoding: .utf8)
@@ -80,17 +82,10 @@ private func perms(_ path: String) -> Int {
     #expect(r.status == 0, "visudo: \(r.out)\(r.err)")
 }
 
-@Test(arguments: ["", "-root", "a b", "a,b", "a:b", "a=b", "me\nALL ALL=(ALL) ALL", "x'y", "x\"y", "%admin", "ä"])
-func unsafeUserNamesAreRefused(name: String) {
-    #expect(throws: HelperInstaller.InstallerError.invalidUserName(name)) {
-        _ = try HelperInstaller.rule(user: name, digest: String(repeating: "0", count: 64))
-    }
-}
-
 @Test(arguments: ["", "abc", String(repeating: "A", count: 64), String(repeating: "g", count: 64), String(repeating: "0", count: 63), String(repeating: "0", count: 65)])
 func malformedDigestsAreRefused(digest: String) {
     #expect(throws: HelperInstaller.InstallerError.invalidDigest(digest)) {
-        _ = try HelperInstaller.rule(user: "me", digest: digest)
+        _ = try HelperInstaller.rule(uid: 501, digest: digest)
     }
 }
 
@@ -122,7 +117,7 @@ func shellQuotingSurvivesTheShell(text: String) throws {
     #expect(perms(box.paths.sudoersFile) == 0o440)
     let rule = try String(contentsOfFile: box.paths.sudoersFile, encoding: .utf8)
     let digest = try HelperInstaller.sha256Hex(of: URL(fileURLWithPath: box.paths.helper))
-    #expect(rule == "\(NSUserName()) ALL=(root) NOPASSWD: sha256:\(digest) \(box.paths.helper) --stdio\n")
+    #expect(rule == "#\(getuid()) ALL=(root) NOPASSWD: sha256:\(digest) \(box.paths.helper) --stdio\n")
     #expect(try run("/usr/sbin/visudo", ["-cf", box.paths.sudoersFile]).status == 0)
     #expect(box.leftovers().isEmpty)
 }
@@ -167,14 +162,55 @@ func shellQuotingSurvivesTheShell(text: String) throws {
 }
 
 @Test func theScriptStagesChecksThenSwapsInThatOrder() throws {
-    let script = try HelperInstaller.script(bundledHelper: "/A.app/ScanlineHelper", expectedDigest: String(repeating: "1", count: 64), user: "me")
+    let script = try HelperInstaller.script(bundledHelper: "/A.app/ScanlineHelper", expectedDigest: String(repeating: "1", count: 64), uid: 501)
     func at(_ s: String) -> String.Index { script.range(of: s)!.lowerBound }
     #expect(script.hasPrefix("set -e\n"))
-    #expect(at("/usr/bin/install -m 0755") < at("/usr/bin/shasum"))
+    #expect(at("umask 077") < at("/usr/bin/install -m 0700"))
+    #expect(at("/usr/bin/install -m 0700") < at("/usr/bin/shasum"))
     #expect(at("/usr/bin/shasum") < at("[ \"$D\" ="))
-    #expect(at("[ \"$D\" =") < at("/usr/sbin/visudo -cf"))
-    #expect(at("/usr/sbin/visudo -cf") < at("/bin/mv -f"))
+    #expect(at("[ \"$D\" =") < at("/bin/chmod 0755"))
+    #expect(at("/bin/chmod 0755") < at("'/usr/sbin/visudo' -cf"))
+    #expect(at("'/usr/sbin/visudo' -cf") < at("/bin/mv -f"))
     #expect(at("/bin/mv -f") < at("/usr/bin/install -m 0440"))
     #expect(script.contains("-o 'root' -g 'wheel'"))
     #expect(script.contains("/bin/launchctl bootout system/local.scanline.helper"))
+}
+
+@Test func aRuleVisudoRejectsLeavesTheOldInstallUntouched() throws {
+    let box = try Sandbox()
+    defer { box.cleanUp() }
+    #expect(try box.install().status == 0)
+    let helperBefore = try Data(contentsOf: URL(fileURLWithPath: box.paths.helper))
+    let ruleBefore = try String(contentsOfFile: box.paths.sudoersFile, encoding: .utf8)
+    let inodeBefore = (try FileManager.default.attributesOfItem(atPath: box.paths.helper))[.systemFileNumber] as? Int
+
+    try Data("a newer helper".utf8).write(to: box.bundled)          // a swap would be visible
+    let r = try box.install(visudo: "/usr/bin/false")                // visudo says no
+    #expect(r.status != 0)
+    #expect(try Data(contentsOf: URL(fileURLWithPath: box.paths.helper)) == helperBefore)
+    #expect((try FileManager.default.attributesOfItem(atPath: box.paths.helper))[.systemFileNumber] as? Int == inodeBefore)
+    #expect(try String(contentsOfFile: box.paths.sudoersFile, encoding: .utf8) == ruleBefore)
+    #expect(box.leftovers().isEmpty)
+}
+
+@Test func aSymlinkedHelperIsRefusedBeforeAnythingIsCopied() throws {
+    let box = try Sandbox()
+    defer { box.cleanUp() }
+    let secret = box.root.appendingPathComponent("secret")
+    try Data("root-only".utf8).write(to: secret)
+    let vetted = try HelperInstaller.sha256Hex(of: box.bundled)
+    try FileManager.default.removeItem(at: box.bundled)
+    try FileManager.default.createSymbolicLink(at: box.bundled, withDestinationURL: secret)
+    let r = try box.install(expected: vetted)
+    #expect(r.status == 4)
+    #expect(!FileManager.default.fileExists(atPath: box.paths.helper))
+    #expect(box.leftovers().isEmpty)
+}
+
+@Test func theStagedCopyIsPrivateUntilItChecksOut() throws {
+    // Stop the script right after staging (bad digest) and look at what was staged: nothing
+    // may be left, and while it existed it was 0700 (install -m 0700 under umask 077).
+    let script = try HelperInstaller.script(bundledHelper: "/A.app/ScanlineHelper", expectedDigest: String(repeating: "1", count: 64), uid: 501)
+    #expect(script.contains("/usr/bin/install -m 0700"))
+    #expect(!script.contains("-m 0755"))
 }

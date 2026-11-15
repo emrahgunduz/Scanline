@@ -21,26 +21,19 @@ public enum HelperInstaller {
         public var owner = "root"
         public var group = "wheel"
         public var tempDirectory = "/private/tmp"
+        public var visudo = "/usr/sbin/visudo"
         /// Stop the old LaunchDaemon (helper v1). Off in tests.
         public var bootOutLegacyDaemon = true
         public init() {}
     }
 
     public enum InstallerError: Error, Equatable, CustomStringConvertible {
-        case invalidUserName(String)
         case invalidDigest(String)
         public var description: String {
             switch self {
-            case let .invalidUserName(u): "can't write a sudo rule for the user name “\(u)”"
             case let .invalidDigest(d): "not a SHA-256 digest: \(d)"
             }
         }
-    }
-
-    /// User names that can appear unquoted in a sudoers rule.
-    public static func isValidUserName(_ name: String) -> Bool {
-        guard let first = name.unicodeScalars.first, first != "-", name.count <= 255 else { return false }
-        return name.unicodeScalars.allSatisfy { CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-").contains($0) }
     }
 
     public static func isValidDigest(_ digest: String) -> Bool {
@@ -52,11 +45,11 @@ public enum HelperInstaller {
         return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
-    /// The sudo rule: `user` may run exactly this helper file (by digest) with its one argument.
-    public static func rule(user: String, digest: String, paths: Paths = Paths()) throws -> String {
-        guard isValidUserName(user) else { throw InstallerError.invalidUserName(user) }
+    /// The sudo rule: the user with this uid may run exactly this helper file (by digest) with
+    /// its one argument. By uid (`#501`), not name: no name can be misread as `ALL` or an alias.
+    public static func rule(uid: uid_t, digest: String, paths: Paths = Paths()) throws -> String {
         guard isValidDigest(digest) else { throw InstallerError.invalidDigest(digest) }
-        return "\(user) ALL=(root) NOPASSWD: sha256:\(digest) \(paths.helper) \(ScanlineHelper.argument)\n"
+        return "#\(uid) ALL=(root) NOPASSWD: sha256:\(digest) \(paths.helper) \(ScanlineHelper.argument)\n"
     }
 
     /// POSIX shell single-quoting.
@@ -65,14 +58,14 @@ public enum HelperInstaller {
     }
 
     /// The install script, to run as root (`/bin/sh`).
-    public static func script(bundledHelper: String, expectedDigest: String, user: String,
+    public static func script(bundledHelper: String, expectedDigest: String, uid: uid_t,
                               paths: Paths = Paths()) throws -> String {
-        guard isValidUserName(user) else { throw InstallerError.invalidUserName(user) }
         guard isValidDigest(expectedDigest) else { throw InstallerError.invalidDigest(expectedDigest) }
         let q = shellQuote
         let dir = (paths.helper as NSString).deletingLastPathComponent
         var lines = [
             "set -e",
+            "umask 077",
             "H=\(q(paths.helper))",
             "NEW=\"$H.new\"",
             "RULE=$(/usr/bin/mktemp \(q(paths.tempDirectory + "/scanline-sudoers.XXXXXX")))",
@@ -84,14 +77,18 @@ public enum HelperInstaller {
         lines += [
             "/bin/rm -f \(q(paths.legacyPlist))",
             "/bin/mkdir -p \(q(dir))",
-            // 1. stage
-            "/usr/bin/install -m 0755 -o \(q(paths.owner)) -g \(q(paths.group)) \(q(bundledHelper)) \"$NEW\"",
+            // 1. stage: only from a plain file, and readable by root alone until it checks out
+            "S=\(q(bundledHelper))",
+            "[ -f \"$S\" ] && [ ! -L \"$S\" ] || { echo 'The bundled helper is not a plain file.' >&2; exit 4; }",
+            "/usr/bin/install -m 0700 -o \(q(paths.owner)) -g \(q(paths.group)) \"$S\" \"$NEW\"",
             // 2. hash the staged copy as root; it must be the file the app vetted
-            "D=$(/usr/bin/shasum -a 256 \"$NEW\" | /usr/bin/cut -d' ' -f1)",
+            "D=$(/usr/bin/shasum -a 256 \"$NEW\") || { echo 'Could not hash the helper.' >&2; exit 5; }",
+            "D=${D%% *}",
             "[ \"$D\" = \(q(expectedDigest)) ] || { echo 'The helper changed while it was being installed.' >&2; exit 3; }",
+            "/bin/chmod 0755 \"$NEW\"",
             // 3. rule from root's hash, checked before anything changes
-            "/usr/bin/printf '%s ALL=(root) NOPASSWD: sha256:%s %s %s\\n' \(q(user)) \"$D\" \"$H\" \(q(ScanlineHelper.argument)) > \"$RULE\"",
-            "/usr/sbin/visudo -cf \"$RULE\" >/dev/null",
+            "/usr/bin/printf '%s ALL=(root) NOPASSWD: sha256:%s %s %s\\n' \(q("#\(uid)")) \"$D\" \"$H\" \(q(ScanlineHelper.argument)) > \"$RULE\"",
+            "\(q(paths.visudo)) -cf \"$RULE\" >/dev/null",
             // 4. swap in binary and rule, back to back
             "/bin/mv -f \"$NEW\" \"$H\"",
             "/usr/bin/install -m 0440 -o \(q(paths.owner)) -g \(q(paths.group)) \"$RULE\" \(q(paths.sudoersFile))",

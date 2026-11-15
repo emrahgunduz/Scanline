@@ -280,7 +280,7 @@ final class AppModel {
         do {
             // The app vets the bundled helper; root re-hashes its own copy and must get the same.
             let digest = try HelperInstaller.sha256Hex(of: bin)
-            shell = try HelperInstaller.script(bundledHelper: bin.path, expectedDigest: digest, user: NSUserName())
+            shell = try HelperInstaller.script(bundledHelper: bin.path, expectedDigest: digest, uid: getuid())
         } catch {
             errorMessage = "Can't install the helper: \(error)"; return
         }
