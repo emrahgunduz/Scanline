@@ -1,0 +1,6 @@
+# Build output
+.build/
+build/
+# Local-only material (traces, reverse-engineering tools, POC, private notes)
+_private/
+.DS_Store

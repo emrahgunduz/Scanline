@@ -1,0 +1,147 @@
+import ScanlineCore
+import SwiftUI
+
+/// Settings in the same visual language as the main window: colored icon tiles, tinted cards.
+struct SettingsView: View {
+    @Bindable var model: AppModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            header
+            SettingsCard(title: "Scanning", symbol: "viewfinder", color: 0x5B4CF5) {
+                SettingsRow("Auto-scan", detail: "Scan as soon as a receipt is inserted. Holding the scanner's button switches it too.") {
+                    Toggle("Auto-scan", isOn: $model.autoScan).toggleStyle(.switch).labelsHidden().tint(Theme.saved)
+                }
+                Divider()
+                SettingsRow("Start after", detail: "Time to straighten the receipt before the scanner pulls it in.") {
+                    Picker("Start after", selection: $model.autoScanDelay) {
+                        ForEach([1.0, 2, 3, 5], id: \.self) { Text("\(Int($0)) s").tag($0) }
+                    }
+                    .pickerStyle(.segmented).labelsHidden().frame(width: 180)
+                    .disabled(!model.autoScan)
+                }
+            }
+            SettingsCard(title: "Appearance", symbol: "paintpalette", color: 0xFF5D3A) {
+                SettingsRow("Theme", detail: nil) {
+                    Picker("Theme", selection: $model.appearance) {
+                        ForEach(Appearance.allCases) { a in Text(a == .system ? "System" : a.label).tag(a) }
+                    }
+                    .pickerStyle(.segmented).labelsHidden().fixedSize()
+                }
+            }
+            SettingsCard(title: "Saving", symbol: "folder.fill", color: 0xF08C00) {
+                SettingsRow(model.folder?.lastPathComponent ?? "No folder",
+                            detail: model.folder.map { ($0.path as NSString).abbreviatingWithTildeInPath } ?? "Choose where scans are saved.") {
+                    HStack(spacing: 8) {
+                        Button("Select Folder…") { model.chooseFolder() }
+                        Button("Open") { model.openFolder() }.disabled(model.folder == nil)
+                    }
+                }
+                Divider()
+                SettingsRow("File names", detail: "Date and a running number, continuing from the folder.") {
+                    Text(model.nextFileName ?? "2026-01-01 0000001.jpg")
+                        .font(.system(.callout, design: .monospaced)).foregroundStyle(.secondary)
+                }
+            }
+            SettingsCard(title: "Scanner", symbol: "scanner", color: connected ? 0x12B886 : 0x868B9C) {
+                SettingsRow(connectionTitle, detail: connectionDetail) {
+                    HStack(spacing: 6) {
+                        Circle().fill(connected ? Theme.saved : Theme.stopped).frame(width: 8, height: 8)
+                        Text(connected ? "Connected" : "Not connected").font(.callout.weight(.medium))
+                    }
+                }
+                Divider()
+                HStack(spacing: 8) {
+                    Button(model.access == .helper ? "Reinstall Helper…" : "Install Helper…") { model.installHelper() }
+                    Button("Open Scan Log") { if let u = ScanSession.defaultLogURL { NSWorkspace.shared.open(u) } }
+                    Spacer()
+                }
+                .padding(.vertical, 4)
+            }
+        }
+        .padding(22)
+        .frame(width: 560)
+        .buttonStyle(.bordered)
+        .controlSize(.regular)
+    }
+
+    private var header: some View {
+        HStack(spacing: 14) {
+            Image(nsImage: NSApp.applicationIconImage).resizable().frame(width: 56, height: 56)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Scanline").font(.title2.weight(.bold))
+                Text("Version \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0") · IRIScan Express 4")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var connected: Bool {
+        if case .disconnected = model.state { return false }
+        return true
+    }
+
+    private var connectionTitle: String {
+        switch model.access {
+        case .helper: "Scanline helper"
+        case .vendorDriver: "Vendor driver (temporary)"
+        case .simulator: "Simulator"
+        case .none: "Not set up"
+        }
+    }
+
+    private var connectionDetail: String {
+        switch model.access {
+        case .helper: "Direct USB. No vendor software, kernel extension or Rosetta."
+        case .vendorDriver: "Install the helper to stop using the old vendor software."
+        case .simulator: "A simulated scanner for testing."
+        case .none: "Install the helper to connect the scanner."
+        }
+    }
+}
+
+struct SettingsCard<Content: View>: View {
+    let title: String
+    let symbol: String
+    let color: UInt32
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: NSColor(hex: color)))
+                    .frame(width: 28, height: 28)
+                    .shadow(color: Color(nsColor: NSColor(hex: color)).opacity(0.35), radius: 4, y: 2)
+                    .overlay(Image(systemName: symbol).font(.system(size: 13, weight: .semibold)).foregroundStyle(.white))
+                Text(title).font(.headline)
+            }
+            VStack(alignment: .leading, spacing: 8) { content }
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Theme.tint(color), in: RoundedRectangle(cornerRadius: 14))
+        }
+    }
+}
+
+struct SettingsRow<Control: View>: View {
+    let title: String
+    let detail: String?
+    @ViewBuilder let control: Control
+
+    init(_ title: String, detail: String?, @ViewBuilder control: () -> Control) {
+        self.title = title
+        self.detail = detail
+        self.control = control()
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 16) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.body.weight(.medium))
+                if let detail { Text(detail).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
+            }
+            Spacer(minLength: 8)
+            control
+        }
+    }
+}

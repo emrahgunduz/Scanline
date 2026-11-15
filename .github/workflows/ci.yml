@@ -1,0 +1,51 @@
+# Tests and a release build on an Apple Silicon runner.
+# The repo is private, where macOS minutes count 10x, so CI runs only when started by hand:
+# Actions -> CI -> Run workflow (pick the branch). For a public repo, add pull_request here.
+# A successful run on main starts the Release workflow (release.yml).
+name: CI
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# Plain `run:` steps get `bash -e`, without pipefail; `shell: bash` adds it.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  app:
+    name: Tests and build
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+      - name: Toolchain
+        run: swift --version && xcodebuild -version
+      # The full log is kept; a failure prints each failed expectation before the summary.
+      - name: swift test
+        run: |
+          mkdir -p build
+          status=0
+          swift test > build/test.log 2>&1 || status=$?
+          if [ "$status" -ne 0 ]; then
+            echo "::group::Failures"
+            grep -E 'error:|✘|Expectation failed|failed' build/test.log || true
+            echo "::endgroup::"
+          fi
+          tail -30 build/test.log
+          exit "$status"
+      - name: Release build and checks
+        run: scripts/build_release.sh
+      - name: Keep the test log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-log
+          path: build/test.log
