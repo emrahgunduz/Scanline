@@ -30,7 +30,7 @@ fi
 zip="$out/notarize.zip"
 result="$out/notary-submit.json"
 trap 'rm -f "$zip"' EXIT
-rm -f "$out/NOTARIZED"
+rm -f "$out/NOTARIZED" "$out/notary-log.json" "$out/notary-submit.json"   # nothing stale from a last run
 ditto -c -k --keepParent "$app" "$zip"
 echo "Submitting to Apple's notary service (this can take a few minutes)…" >&2
 xcrun notarytool submit "$zip" "${auth[@]}" --wait --timeout 30m --output-format json > "$result" || true
@@ -49,7 +49,7 @@ fi
 
 xcrun stapler staple "$app"
 xcrun stapler validate "$app"
-assessment=$(spctl -a -vv -t exec "$app" 2>&1)
+assessment=$(spctl -a -vv -t exec "$app" 2>&1) || true   # judged below, with its output
 echo "$assessment" >&2
 [[ $assessment == *accepted* && $assessment == *"Notarized Developer ID"* ]] || {
   echo "notarize: Gatekeeper doesn't accept the stapled app" >&2; exit 1; }
