@@ -24,25 +24,25 @@ struct ScanlineApp: App {
                 Divider()
                 // No bare Return/Space here: a menu key equivalent would take them from the rename field.
                 Button("Rename (Return)") { model.beginRename() }
-                    .disabled(model.selectedFile == nil || model.renaming != nil)
+                    .disabled(model.selectedFile == nil || model.isRenaming)
                 Button("Show in Finder") { model.revealSelected() }
                     .disabled(model.selectedFile == nil)
                 // Disabled while renaming, or ⌘⌫ would trash the file instead of editing the name.
                 Button("Move to Trash") { model.trashSelected() }
                     .keyboardShortcut(.delete, modifiers: .command)
-                    .disabled(model.selectedFile == nil || model.renaming != nil)
+                    .disabled(model.selectedFile == nil || model.isRenaming)
             }
             CommandMenu("Image") {
                 Button(model.quickLookURL == nil ? "Quick Look" : "Close Quick Look") { model.toggleQuickLook() }
                     .keyboardShortcut("y")
-                    .disabled(model.selectedFile == nil || model.renaming != nil)
+                    .disabled(model.selectedFile == nil || model.isRenaming)
                 Divider()
                 Group {
                     Button("Rotate Left") { model.rotateSelected(.left) }.keyboardShortcut("l")
                     Button("Rotate Right") { model.rotateSelected(.right) }.keyboardShortcut("r")
                     Button("Rotate 180°") { model.rotateSelected(.upsideDown) }
                 }
-                .disabled(model.selectedFile == nil || model.renaming != nil)
+                .disabled(model.selectedFile == nil || model.isRenaming)
             }
             CommandMenu("Scan") {
                 Button("Scan Now") { model.scanNow() }.keyboardShortcut(.return, modifiers: .command)

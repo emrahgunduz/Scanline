@@ -119,7 +119,7 @@ struct FileListView: View {
         keyed(list)
             .quickLookPreview($model.quickLookURL, in: model.library.files.map(\.url))
             .onChange(of: model.quickLookURL) { _, url in quickLookChanged(url) }
-            .onChange(of: model.selection) { _, url in if model.quickLookURL != nil { model.quickLookURL = url } }
+            .onChange(of: model.selection) { _, url in selectionChanged(url) }
             .onChange(of: model.renaming) { _, url in renamingChanged(url) }
             .onChange(of: model.listFocusRequest) { listFocused = true }
             .onAppear { listFocused = true }
@@ -145,13 +145,19 @@ struct FileListView: View {
     }
 
     private func listKey(_ press: KeyPress, _ action: () -> Void) -> KeyPress.Result {
-        guard model.renaming == nil, press.modifiers.isEmpty, model.selectedFile != nil else { return .ignored }
+        guard !model.isRenaming, press.modifiers.isEmpty, model.selectedFile != nil else { return .ignored }
         action()
         return .handled
     }
 
     private func quickLookChanged(_ url: URL?) {
         if let url { if model.selection != url { model.selection = url } } else { listFocused = true }
+    }
+
+    private func selectionChanged(_ url: URL?) {
+        // Moving to another row cancels an open rename, as in Finder.
+        if model.renaming != nil, model.renaming != url { model.renaming = nil }
+        if model.quickLookURL != nil { model.quickLookURL = url }
     }
 
     private func renamingChanged(_ url: URL?) {
