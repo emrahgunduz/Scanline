@@ -13,9 +13,11 @@ let package = Package(
     targets: [
         .target(name: "CUSBHost",
                 linkerSettings: [.linkedFramework("IOUSBHost"), .linkedFramework("IOKit"), .linkedFramework("Foundation")]),
-        .target(name: "ScanlineCore", dependencies: ["CUSBHost"], linkerSettings: [.linkedFramework("IOKit")]),
+        // USB transport and helper wire protocol: everything the privileged helper links.
+        .target(name: "ScanlineUSB", dependencies: ["CUSBHost"]),
+        .target(name: "ScanlineCore", dependencies: ["ScanlineUSB"], linkerSettings: [.linkedFramework("IOKit")]),
         .executableTarget(name: "scanprobe", dependencies: ["ScanlineCore"]),
-        .executableTarget(name: "ScanlineHelper", dependencies: ["ScanlineCore"]),
+        .executableTarget(name: "ScanlineHelper", dependencies: ["ScanlineUSB"]),
         .executableTarget(name: "Scanline", dependencies: ["ScanlineCore"]),
         .testTarget(name: "ScanlineCoreTests", dependencies: ["ScanlineCore"]),
     ]
