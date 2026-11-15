@@ -48,10 +48,7 @@ driver and a recorded scan; see [docs/protocol.md](docs/protocol.md).
 
 1. Download `Scanline-<version>.zip` from [Releases](../../releases) and unzip it.
    To check the download: `shasum -a 256 -c Scanline-<version>.zip.sha256`
-2. Releases that say *notarized* in their notes open normally. Older releases (v1.0.1 and
-   earlier) aren't notarized, so macOS blocks them the first time. Either run
-   `xattr -dr com.apple.quarantine Scanline.app`, or open it once, then allow it in
-   **System Settings › Privacy & Security › Open Anyway**.
+2. Scanline is signed with Developer ID and notarized by Apple, so it opens normally.
 3. Move **Scanline.app** to Applications and open it.
 4. Click **Install Helper…** (sidebar, or **Settings › Scanner**) and enter your password once.
 
