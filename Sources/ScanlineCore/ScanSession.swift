@@ -52,6 +52,7 @@ public final class ScanSession: @unchecked Sendable {
     private var scanNowRequested = false
     private var running = false
     private var thread: Thread?
+    private var finished: DispatchSemaphore?
     private let logURL: URL?
 
     public init(settings: Settings, logURL: URL? = ScanSession.defaultLogURL,
@@ -79,7 +80,12 @@ public final class ScanSession: @unchecked Sendable {
         lock.withLock {
             guard !running else { return }
             running = true
-            let t = Thread { [weak self] in self?.run() }
+            let done = DispatchSemaphore(value: 0)
+            finished = done
+            let t = Thread { [weak self] in
+                self?.run()
+                done.signal()
+            }
             t.name = "ScanSession"
             thread = t
             t.start()
@@ -88,6 +94,23 @@ public final class ScanSession: @unchecked Sendable {
 
     /// Stops after the current step; the transport is closed on the worker thread.
     public func stop() { lock.withLock { running = false } }
+
+    /// Stops and waits until the worker has closed its transport (so a helper has let go of the
+    /// scanner). False if it is still busy after `timeout`, e.g. in the middle of a scan.
+    @discardableResult
+    public func stopAndWait(timeout: TimeInterval) -> Bool {
+        stop()
+        guard let done = lock.withLock({ finished }) else { return true }
+        guard done.wait(timeout: .now() + timeout) == .success else { return false }
+        done.signal()   // let later waiters through too
+        return true
+    }
+
+    /// Sleeps up to `seconds`, waking early when the session is stopped.
+    private func pause(_ seconds: TimeInterval) {
+        let end = Date().addingTimeInterval(seconds)
+        while isRunning, Date() < end { Thread.sleep(forTimeInterval: min(0.05, max(0, end.timeIntervalSinceNow))) }
+    }
 
     private var isRunning: Bool { lock.withLock { running } }
     private func takeScanNow() -> Bool { lock.withLock { defer { scanNowRequested = false }; return scanNowRequested } }
@@ -122,7 +145,8 @@ public final class ScanSession: @unchecked Sendable {
                     log("connected")
                 } catch {
                     disconnect("\(error)")
-                    sleep(2)
+                    // An outdated helper won't fix itself: retry slowly until it is updated.
+                    if case ScanError.helperOutdated = error { pause(10) } else { pause(2) }
                     continue
                 }
             }
@@ -164,10 +188,10 @@ public final class ScanSession: @unchecked Sendable {
                 log("error: \(error)")
                 onEvent(.problem(.error, "Scanner error: \(error)"))
                 disconnect("\(error)")
-                sleep(1)
+                pause(1)
                 continue
             }
-            Thread.sleep(forTimeInterval: cfg.pollInterval)
+            pause(cfg.pollInterval)
         }
         transport?.close()
     }

@@ -69,8 +69,8 @@ struct SidebarView: View {
             .padding(.horizontal, 16).padding(.bottom, 6)
             FileListView(model: model)
                 .frame(minHeight: 120, idealHeight: 320, maxHeight: .infinity)
-            if model.access == .vendorDriver || model.access == .none {
-                HelperBanner(model: model).padding(12)
+            if let kind = model.helperBanner {
+                HelperBanner(model: model, kind: kind).padding(12)
             }
         }
         .frame(minHeight: 0, maxHeight: .infinity, alignment: .top)
@@ -205,15 +205,44 @@ struct Thumb: View {
 
 struct HelperBanner: View {
     let model: AppModel
+    let kind: AppModel.HelperBannerKind
+
+    private var text: (title: String, body: String, button: String, canDismiss: Bool) {
+        switch kind {
+        case .install:
+            return (model.access == .vendorDriver ? "Using the old vendor driver" : "Scanner access needed",
+                    "Install the Scanline helper so the scanner works without the vendor software. You'll be asked for your password once.",
+                    "Install Helper…", false)
+        case .repair:
+            return ("Finish setting up the helper", "The helper is installed but its sudo rule is missing. Repair it; you'll be asked for your password once.",
+                    "Repair Helper…", false)
+        case .secure:
+            return ("Secure the scanner helper", "Update once so sudo only ever runs this exact helper. You'll be asked for your password.",
+                    "Update Helper…", true)
+        case .update:
+            return ("Helper update available", "This version of Scanline comes with an updated scanner helper. Scanning still works; update to stay in step. You'll be asked for your password once.",
+                    "Update Helper…", true)
+        case .incompatible:
+            return ("Helper update needed", "This version of Scanline needs a newer helper to connect the scanner. You'll be asked for your password once.",
+                    "Update Helper…", false)
+        }
+    }
+
     var body: some View {
+        let t = text
         VStack(alignment: .leading, spacing: 8) {
-            Label(model.access == .vendorDriver ? "Using the old vendor driver" : "Scanner access needed",
-                  systemImage: "bolt.shield")
+            Label(t.title, systemImage: kind == .install ? "bolt.shield" : "arrow.triangle.2.circlepath")
                 .font(.callout.weight(.semibold))
-            Text("Install the Scanline helper so the scanner works without the vendor software. You'll be asked for your password once.")
+            Text(t.body)
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            Button("Install Helper…") { model.installHelper() }
-                .buttonStyle(.borderedProminent).tint(Theme.accent).controlSize(.small)
+            HStack(spacing: 8) {
+                Button(t.button) { model.installHelper() }
+                    .buttonStyle(.borderedProminent).tint(Theme.accent).controlSize(.small)
+                    .disabled(model.scannerBusy)
+                if t.canDismiss {
+                    Button("Not Now") { model.dismissHelperBanner() }.controlSize(.small)
+                }
+            }
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)

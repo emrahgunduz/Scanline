@@ -51,8 +51,21 @@ struct SettingsView: View {
                     }
                 }
                 Divider()
+                if model.access == .helper || model.helperStatus != nil {
+                    SettingsRow("Helper", detail: helperDetail) {
+                        Text(helperBadge).font(.callout.weight(.medium)).foregroundStyle(helperNeedsAction ? Theme.stopped : .secondary)
+                    }
+                    Divider()
+                }
                 HStack(spacing: 8) {
-                    Button(model.access == .helper ? "Reinstall Helper…" : "Install Helper…") { model.installHelper() }
+                    if helperNeedsAction {
+                        Button(helperButton) { model.installHelper() }
+                            .buttonStyle(.borderedProminent).tint(Theme.accent)
+                            .disabled(model.scannerBusy || model.helperStatus == .bundleMissing)
+                    } else {
+                        Button(helperButton) { model.installHelper() }
+                            .disabled(model.scannerBusy || model.helperStatus == .bundleMissing)
+                    }
                     Button("Open Scan Log") { if let u = ScanSession.defaultLogURL { NSWorkspace.shared.open(u) } }
                     Spacer()
                 }
@@ -61,6 +74,7 @@ struct SettingsView: View {
         }
         .padding(22)
         .frame(width: 560)
+        .onAppear { model.refreshHelperStatus() }
         .buttonStyle(.bordered)
         .controlSize(.regular)
     }
@@ -73,6 +87,46 @@ struct SettingsView: View {
                 Text("Version \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0") · IRIScan Express 4")
                     .font(.callout).foregroundStyle(.secondary)
             }
+        }
+    }
+
+    private var helperNeedsAction: Bool {
+        switch model.helperStatus {
+        case .notInstalled?, .ruleMissing?, .unpinned?, .outdated?: true
+        default: false
+        }
+    }
+
+    private var helperButton: String {
+        switch model.helperStatus {
+        case .notInstalled?: "Install Helper…"
+        case .ruleMissing?: "Repair Helper…"
+        case .unpinned?, .outdated?: "Update Helper…"
+        default: model.access == .helper ? "Reinstall Helper…" : "Install Helper…"
+        }
+    }
+
+    private var helperBadge: String {
+        switch model.helperStatus {
+        case .current?: "Up to date"
+        case .outdated?: "Update available"
+        case .unpinned?: "Update recommended"
+        case .ruleMissing?: "Needs repair"
+        case .notInstalled?: "Not installed"
+        case .bundleMissing?: "Not bundled"
+        case nil: "Checking…"
+        }
+    }
+
+    private var helperDetail: String {
+        switch model.helperStatus {
+        case .current?: "The installed helper matches this version of Scanline."
+        case .outdated?: "The installed helper is from a different Scanline build."
+        case .unpinned?: "Its sudo rule isn't pinned to the helper's exact bytes yet."
+        case .ruleMissing?: "The helper is installed, but its sudo rule is missing."
+        case .notInstalled?: "Install it to connect the scanner without the vendor software."
+        case .bundleMissing?: "This build of Scanline has no bundled helper."
+        case nil: "Comparing the installed helper with this version of Scanline."
         }
     }
 
