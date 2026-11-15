@@ -6,6 +6,9 @@ git -C "$root" fetch --tags --quiet 2>/dev/null || true   # dev builds take thei
 "$root/scripts/build_release.sh"
 osascript -e 'quit app "Scanline"' 2>/dev/null || true
 sleep 1
+# Replace, never merge: ditto over an old copy keeps files the new build no longer has,
+# which breaks the signature seal.
+rm -rf /Applications/Scanline.app
 ditto "$root/build/Release/Scanline.app" /Applications/Scanline.app
 alias_ok=$(osascript -e 'tell application "Finder" to try
   return POSIX path of (original item of alias file "Scanline" of (path to desktop folder) as alias)
