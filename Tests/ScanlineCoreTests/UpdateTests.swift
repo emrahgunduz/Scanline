@@ -69,6 +69,17 @@ private let now = Date(timeIntervalSince1970: 1_800_000_000)
     #expect(UpdateCheck.isDue(now: now, lastCheck: now.addingTimeInterval(-day), nextAllowed: nil))
     #expect(!UpdateCheck.isDue(now: now, lastCheck: nil, nextAllowed: now.addingTimeInterval(60)))   // rate limited
     #expect(UpdateCheck.isDue(now: now, lastCheck: now.addingTimeInterval(3600), nextAllowed: nil))   // clock went back
+    #expect(UpdateCheck.isDue(now: now, lastCheck: nil, nextAllowed: now.addingTimeInterval(day * 5)))  // set by a wrong clock
+}
+
+@Test func rateLimitWaitsAreClamped() {
+    let far = now.addingTimeInterval(86_400 * 3)
+    #expect(UpdateCheck.interpret(status: 403, headers: ["X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "\(Int(far.timeIntervalSince1970))"], body: Data(), now: now)
+            == .rateLimited(until: now.addingTimeInterval(3600)))
+    #expect(UpdateCheck.interpret(status: 429, headers: ["Retry-After": "999999"], body: Data(), now: now) == .rateLimited(until: now.addingTimeInterval(3600)))
+    #expect(!UpdateCheck.isWaiting(now: now, until: nil))
+    #expect(UpdateCheck.isWaiting(now: now, until: now.addingTimeInterval(60)))
+    #expect(!UpdateCheck.isWaiting(now: now, until: now.addingTimeInterval(-1)))
 }
 
 @Test func releasePageIsBuiltFromAFixedBase() {

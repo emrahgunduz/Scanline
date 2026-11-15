@@ -27,7 +27,10 @@ final class UpdateController {
     @ObservationIgnored private var etag: String? { didSet { store(etag, "update.etag") } }
     @ObservationIgnored private var latestTag: String? { didSet { store(latestTag, "update.latestTag") } }
     @ObservationIgnored private var lastCheck: Date? { didSet { store(lastCheck, "update.lastCheck") } }
-    @ObservationIgnored private var nextAllowed: Date? { didSet { store(nextAllowed, "update.nextAllowed") } }
+    /// GitHub's rate-limit back-off (persisted). Check Now respects it.
+    @ObservationIgnored private var rateLimitedUntil: Date? { didSet { store(rateLimitedUntil, "update.nextAllowed") } }
+    /// After a failed check, wait an hour before the automatic retry. Check Now ignores it.
+    @ObservationIgnored private var retryAfter: Date?
 
     @ObservationIgnored private let persistent: Bool
     @ObservationIgnored private let defaults = UserDefaults.standard
@@ -39,7 +42,9 @@ final class UpdateController {
 
     /// `persistent` false (simulator, folder override): no automatic checks and nothing stored.
     init(persistent: Bool) {
-        self.persistent = persistent
+        // A test endpoint must not leave its fake release in the real cache.
+        self.persistent = persistent && ProcessInfo.processInfo.environment["SCANLINE_UPDATE_URL"] == nil
+        let persistent = self.persistent
         let d = UserDefaults.standard
         enabled = persistent ? (d.object(forKey: "update.enabled") as? Bool ?? (build.kind == .release)) : false
         if persistent {
@@ -47,10 +52,12 @@ final class UpdateController {
             etag = d.string(forKey: "update.etag")
             latestTag = d.string(forKey: "update.latestTag")
             lastCheck = d.object(forKey: "update.lastCheck") as? Date
-            nextAllowed = d.object(forKey: "update.nextAllowed") as? Date
+            rateLimitedUntil = d.object(forKey: "update.nextAllowed") as? Date
         }
         apply(tag: latestTag)
-        if let lastCheck, available == nil, latestTag != nil { status = .upToDate(lastCheck) }
+        if let lastCheck, available == nil {
+            status = latestTag != nil ? .upToDate(lastCheck) : .unavailable(lastCheck)
+        }
         loaded = true
         schedule()
     }
@@ -67,7 +74,9 @@ final class UpdateController {
 
     /// The "Check Now" button: ignores the daily interval, but not a rate-limit back-off.
     func checkNow() {
-        if let nextAllowed, Date() < nextAllowed { status = .rateLimited(until: nextAllowed); return }
+        if UpdateCheck.isWaiting(now: Date(), until: rateLimitedUntil), let until = rateLimitedUntil {
+            status = .rateLimited(until: until); return
+        }
         Task { await check() }
     }
 
@@ -78,7 +87,8 @@ final class UpdateController {
         loop = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
-                if UpdateCheck.isDue(now: Date(), lastCheck: self.lastCheck, nextAllowed: self.nextAllowed) {
+                let wait = [self.rateLimitedUntil, self.retryAfter].compactMap { $0 }.max()
+                if UpdateCheck.isDue(now: Date(), lastCheck: self.lastCheck, nextAllowed: wait) {
                     await self.check()
                 }
                 try? await Task.sleep(for: .seconds(3600))
@@ -90,37 +100,42 @@ final class UpdateController {
         guard !inFlight else { return }
         inFlight = true
         defer { inFlight = false }
+        let previous = status
         status = .checking
-        var result = await checker.check(etag: etag)
-        if result == .notModified && latestTag == nil {
-            etag = nil                                   // cache lost its tag: ask again in full
-            result = await checker.check(etag: nil)
-        }
+        // Its own task: turning the setting off cancels the loop, not a request already sent.
+        let checker = checker, etag = etag, needsFull = latestTag == nil
+        let result = await Task {
+            var r = await checker.check(etag: etag)
+            if r == .notModified && needsFull { r = await checker.check(etag: nil) }   // cache lost its tag
+            return r
+        }.value
+        if case .notModified = result, needsFull { status = previous; return }
         let now = Date()
         switch result {
         case let .release(release, newEtag):
-            etag = newEtag
+            self.etag = newEtag
             latestTag = release.tag
             lastCheck = now
-            nextAllowed = nil
+            rateLimitedUntil = nil; retryAfter = nil
             apply(tag: release.tag)
             status = available == nil ? .upToDate(now) : .idle
         case .notModified:
             lastCheck = now
-            nextAllowed = nil
+            rateLimitedUntil = nil; retryAfter = nil
             apply(tag: latestTag)
             status = available == nil ? .upToDate(now) : .idle
         case .unavailable:
-            etag = nil; latestTag = nil
+            self.etag = nil; latestTag = nil
             lastCheck = now
+            rateLimitedUntil = nil; retryAfter = nil
             apply(tag: nil)
             status = .unavailable(now)
         case let .rateLimited(until):
-            nextAllowed = until
+            rateLimitedUntil = until
             status = .rateLimited(until: until)
         case let .failed(message):
             // Try again in an hour rather than a day; the loop re-evaluates hourly anyway.
-            nextAllowed = now.addingTimeInterval(3600)
+            retryAfter = now.addingTimeInterval(3600)
             status = .failed(now, message)
         }
     }

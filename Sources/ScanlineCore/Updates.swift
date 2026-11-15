@@ -110,10 +110,11 @@ public enum UpdateCheck {
         case 404:
             return .unavailable
         case 403, 429:
-            if let retry = h["retry-after"].flatMap(TimeInterval.init) { return .rateLimited(until: now.addingTimeInterval(retry)) }
+            if let retry = h["retry-after"].flatMap(TimeInterval.init) { return .rateLimited(until: now.addingTimeInterval(min(max(retry, 0), 3600))) }
             guard status == 429 || h["x-ratelimit-remaining"] == "0" else { return .failed("HTTP 403") }
             if let reset = h["x-ratelimit-reset"].flatMap(TimeInterval.init) {
-                return .rateLimited(until: max(now, Date(timeIntervalSince1970: reset)))
+                // GitHub's window is an hour; clamp in case this Mac's clock is off.
+                return .rateLimited(until: min(max(now, Date(timeIntervalSince1970: reset)), now.addingTimeInterval(3600)))
             }
             return .rateLimited(until: now.addingTimeInterval(3600))
         default:
@@ -123,10 +124,17 @@ public enum UpdateCheck {
 
     /// Whether an automatic check should run now.
     public static func isDue(now: Date, lastCheck: Date?, nextAllowed: Date?, interval: TimeInterval = interval) -> Bool {
-        if let nextAllowed, now < nextAllowed { return false }
+        if isWaiting(now: now, until: nextAllowed) { return false }
         guard let lastCheck else { return true }
         // A clock set backwards shouldn't stop checks for good.
         return now.timeIntervalSince(lastCheck) >= interval || lastCheck > now
+    }
+
+    /// Whether a back-off is still running. One further away than a day can only come from a
+    /// clock that was wrong when it was set, so it is ignored.
+    public static func isWaiting(now: Date, until: Date?) -> Bool {
+        guard let until else { return false }
+        return now < until && until.timeIntervalSince(now) <= interval
     }
 
     /// The release page, built from a fixed base; nothing from the response body is opened.
