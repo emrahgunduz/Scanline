@@ -142,3 +142,7 @@ defaults delete local.scanline.app
 ## Status
 
 Personal project, built for one scanner. Not affiliated with IRIS, Canon or Avision.
+
+## License
+
+Scanline is licensed under the [GNU Affero General Public License v3.0](LICENSE).
