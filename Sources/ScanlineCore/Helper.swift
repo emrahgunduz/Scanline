@@ -132,7 +132,7 @@ public final class HelperTransport: ScannerTransport, @unchecked Sendable {
         guard !p.isRunning else { return nil }
         let text = String(decoding: stderr.availableData, as: UTF8.self)
         if text.contains("password") || text.contains("not allowed") || text.contains("sudoers") {
-            return ScanError.protocolError("the Scanline helper is not authorised; reinstall it in Settings")
+            return ScanError.helperNotAuthorised
         }
         return nil
     }

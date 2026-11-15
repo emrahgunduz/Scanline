@@ -1,6 +1,6 @@
 import Foundation
 
-public enum ScanError: Error, CustomStringConvertible {
+public enum ScanError: Error, Equatable, CustomStringConvertible {
     case deviceNotFound
     case io(String, kern_return_t)
     case protocolError(String)
@@ -8,6 +8,9 @@ public enum ScanError: Error, CustomStringConvertible {
     case timeout(String)
     /// The installed helper speaks an older wire protocol than this app needs.
     case helperOutdated(installed: UInt32)
+    /// sudo won't run the installed helper for this user (rule missing, for another user, or
+    /// pinned to different bytes).
+    case helperNotAuthorised
 
     public var description: String {
         switch self {
@@ -17,6 +20,7 @@ public enum ScanError: Error, CustomStringConvertible {
         case let .scsiStatus(s, cdb): return "SCSI status 0x\(String(s, radix: 16)) for \(cdb.hex)"
         case let .timeout(s): return "timeout: \(s)"
         case let .helperOutdated(v): return "the Scanline helper is out of date (protocol \(v)); update it in Settings"
+        case .helperNotAuthorised: return "the Scanline helper is not authorised; repair it in Settings"
         }
     }
 }
