@@ -29,6 +29,7 @@ struct SettingsView: View {
                     .pickerStyle(.segmented).labelsHidden().fixedSize()
                 }
             }
+            UpdatesCard(updates: model.updates)
             SettingsCard(title: "Saving", symbol: "folder.fill", color: 0xF08C00) {
                 SettingsRow(model.folder?.lastPathComponent ?? "No folder",
                             detail: model.folder.map { ($0.path as NSString).abbreviatingWithTildeInPath } ?? "Choose where scans are saved.") {
@@ -84,7 +85,7 @@ struct SettingsView: View {
             Image(nsImage: NSApp.applicationIconImage).resizable().frame(width: 56, height: 56)
             VStack(alignment: .leading, spacing: 2) {
                 Text("Scanline").font(.title2.weight(.bold))
-                Text("Version \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0") · IRIScan Express 4")
+                Text("Version \(model.updates.build.displayVersion) · IRIScan Express 4")
                     .font(.callout).foregroundStyle(.secondary)
             }
         }
@@ -204,5 +205,56 @@ struct SettingsRow<Control: View>: View {
             Spacer(minLength: 8)
             control
         }
+    }
+}
+
+/// Once-a-day check for a newer release on GitHub.
+struct UpdatesCard: View {
+    @Bindable var updates: UpdateController
+
+    var body: some View {
+        SettingsCard(title: "Updates", symbol: "arrow.down.circle", color: 0x1C7ED6) {
+            SettingsRow("Check for updates", detail: "Once a day Scanline asks GitHub for the latest release. Nothing about you or this Mac is sent.") {
+                Toggle("Check for updates", isOn: $updates.enabled).toggleStyle(.switch).labelsHidden().tint(Theme.saved)
+            }
+            Divider()
+            SettingsRow(title, detail: detail) {
+                HStack(spacing: 8) {
+                    if updates.available != nil {
+                        Button("View Release") { updates.openRelease() }
+                            .buttonStyle(.borderedProminent).tint(Theme.accent)
+                    }
+                    Button("Check Now") { updates.checkNow() }.disabled(updates.status == .checking)
+                }
+            }
+        }
+    }
+
+    private var title: String {
+        if let a = updates.available { return "Scanline \(ReleaseVersion(a.tag)?.description ?? a.tag) is available" }
+        return switch updates.status {
+        case .checking: "Checking…"
+        case .upToDate: "Up to date"
+        case .unavailable: "No public release found"
+        case .rateLimited: "Checked too often"
+        case .failed: "Couldn't check"
+        case .idle: updates.build.kind == .dev && !updates.enabled ? "Development build" : "Not checked yet"
+        }
+    }
+
+    private var detail: String? {
+        if updates.available != nil { return "You have \(updates.build.version). Nothing is installed automatically." }
+        return switch updates.status {
+        case .upToDate(let d), .unavailable(let d): "Checked \(Self.relative(d))."
+        case .rateLimited(let until): "GitHub asked to wait; trying again \(Self.relative(until))."
+        case .failed(let d, let why): "Checked \(Self.relative(d)): \(why)."
+        case .idle where updates.build.kind == .dev && !updates.enabled:
+            "\(updates.build.describe ?? updates.build.version): automatic checks are off."
+        default: nil
+        }
+    }
+
+    private static func relative(_ date: Date) -> String {
+        abs(date.timeIntervalSinceNow) < 60 ? "just now" : RelativeDateTimeFormatter().localizedString(for: date, relativeTo: Date())
     }
 }

@@ -82,6 +82,10 @@ crashes) the helper releases the scanner and exits, and macOS gets the device ba
 
 The scan log is at `~/Library/Logs/Scanline/scan.log` (**Settings › Open Scan Log**).
 
+## Updates
+
+Once a day, release builds ask GitHub for the latest Scanline release: one anonymous `GET` to `api.github.com/repos/emrahgunduz/Scanline/releases/latest`, with a generic `User-Agent`, no cookies and nothing about you or your Mac. If a newer version exists, a small banner and **Settings → Updates** link to its release page. Nothing is downloaded or installed automatically. Turn it off with **Check for updates** in Settings. Builds made from source are development builds and don't check on their own.
+
 ## Moving off the vendor software
 
 Once Scanline works for you, Capture Tool, the TWAIN driver and the kernel extension can go, and

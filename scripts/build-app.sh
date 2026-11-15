@@ -9,7 +9,18 @@ swift build -c release --product ScanlineHelper
 bin=$(swift build -c release --show-bin-path)
 [[ -f Resources/AppIcon.icns ]] || swift tools/icon/make-icon.swift Resources/AppIcon.icns
 
-version=${SCANLINE_VERSION:-1.0}
+# Release builds (release.yml) set SCANLINE_VERSION; anything else is a dev build, versioned
+# from the latest v* tag. Dev builds never check for updates on their own.
+if [[ -n ${SCANLINE_VERSION:-} ]]; then
+  version=$SCANLINE_VERSION
+  kind=release
+  describe=v$version
+else
+  tag=$(git describe --tags --match 'v[0-9]*' --abbrev=0 2>/dev/null || echo v0.0.0)
+  version=${tag#v}
+  kind=dev
+  describe=$(git describe --tags --match 'v[0-9]*' --dirty --always 2>/dev/null || echo unknown)
+fi
 build=${SCANLINE_BUILD:-$(git rev-list --count HEAD 2>/dev/null || echo 1)}
 app="$root/build/Scanline.app"
 rm -rf "$app"
@@ -30,6 +41,8 @@ cat > "$app/Contents/Info.plist" <<PLIST
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>$version</string>
   <key>CFBundleVersion</key><string>$build</string>
+  <key>ScanlineBuildKind</key><string>$kind</string>
+  <key>ScanlineGitDescribe</key><string>$describe</string>
   <key>LSMinimumSystemVersion</key><string>26.0</string>
   <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
   <key>NSHighResolutionCapable</key><true/>

@@ -60,6 +60,7 @@ final class AppModel {
     let library = FolderLibrary()
     let zoom = ZoomController()
     let simulator: SimulatedScanner?
+    let updates: UpdateController
 
     enum Outcome: Equatable {
         case saved(name: String, inches: Double, skew: Double)
@@ -75,6 +76,7 @@ final class AppModel {
         let env = ProcessInfo.processInfo.environment
         persistent = env["SCANLINE_SIMULATE"] != "1" && env["SCANLINE_FOLDER"] == nil
         simulator = env["SCANLINE_SIMULATE"] == "1" ? SimulatedScanner() : nil
+        updates = UpdateController(persistent: persistent)
         folder = defaults.string(forKey: "folder").map { URL(fileURLWithPath: $0, isDirectory: true) }
         if let override = ProcessInfo.processInfo.environment["SCANLINE_FOLDER"] {
             folder = URL(fileURLWithPath: override, isDirectory: true)   // testing: not persisted

@@ -2,6 +2,7 @@
 # Builds the release app, installs it to /Applications and keeps ~/Desktop/Scanline pointing there.
 set -euo pipefail
 root=${0:A:h:h}
+git -C "$root" fetch --tags --quiet 2>/dev/null || true   # dev builds take their version from the latest tag
 "$root/scripts/build_release.sh"
 osascript -e 'quit app "Scanline"' 2>/dev/null || true
 sleep 1
