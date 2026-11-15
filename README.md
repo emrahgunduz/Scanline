@@ -137,8 +137,9 @@ sudo .build/release/scanprobe scan out.pgm --usb
 
 ### Signing and notarization (maintainers)
 
-Releases are notarized when the repository's `release` environment holds these Actions secrets;
-with none of them set, releases stay ad-hoc signed, and with only some set the release fails:
+Releases are notarized when the repository holds these Actions secrets (Settings › Secrets and
+variables › Actions); with none of them set, releases stay ad-hoc signed, and with only some set
+the release fails:
 
 | Secret | Holds |
 |---|---|

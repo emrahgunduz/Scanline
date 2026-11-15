@@ -12,7 +12,7 @@ app=${1:?usage: notarize.sh path/to/Scanline.app}
 out=${app:h}
 
 # Only a Developer ID signature can be notarized.
-team=$(codesign -dvv "$app" 2>&1 | sed -n 's/^TeamIdentifier=//p')
+team=$(codesign -dvv "$app" 2>&1 | sed -n 's/^TeamIdentifier=//p' || true)   # unsigned: empty
 if [[ -z $team || $team == "not set" ]]; then
   echo "notarize: $app is not signed with a Developer ID (ad-hoc builds can't be notarized)" >&2
   exit 1

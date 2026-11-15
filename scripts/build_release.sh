@@ -60,7 +60,7 @@ if is_developer_id "$identity"; then
   done
   [[ $(codesign -dvv "$app/Contents/Resources/ScanlineHelper" 2>&1) == *"Identifier=local.scanline.helper"* ]] \
     || { echo "helper identifier unexpected" >&2; exit 1; }
-  [[ -z $(codesign -d --entitlements - "$app/Contents/Resources/ScanlineHelper" 2>/dev/null | grep -i '<key>') ]] \
+  [[ -z $(codesign -d --xml --entitlements - "$app/Contents/Resources/ScanlineHelper" 2>/dev/null | grep -i '<key>') ]] \
     || { echo "helper has entitlements" >&2; exit 1; }
 fi
 

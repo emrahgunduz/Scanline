@@ -7,8 +7,8 @@
 #
 # Signing: when the five signing secrets are set (see README, "Signing and notarization"), the
 # app is signed with Developer ID, notarized and stapled; with none set it is ad-hoc signed, as
-# before. Some but not all set fails the job. The secrets live in the "release" environment, so
-# they can be limited to main and protected with required reviewers.
+# before. Some but not all set fails the job. (Once the repository is public, consider moving
+# them to an environment with required reviewers and adding `environment:` to this job.)
 #
 # Version: 1.0.<run number>, where the run number counts this workflow's runs (skipped runs
 # count too, so numbers can jump). The release and its tag (v1.0.<n>) are created on that commit.
@@ -37,7 +37,6 @@ jobs:
     # After CI only when it passed (a failed or cancelled CI run releases nothing).
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: macos-26
-    environment: release
     timeout-minutes: 60
     env:
       VERSION: 1.0.${{ github.run_number }}
