@@ -65,11 +65,12 @@ private final class HidingFileManager: FileManager, @unchecked Sendable {
 }
 
 @Test func aNameTakenBehindTheListingsBackIsSkipped() throws {
-    let today = FileNamer.name(counter: 2, date: Date())
+    let now = Date()                                                    // one clock read: no midnight race
+    let today = FileNamer.name(counter: 2, date: now)
     let dir = try folder(["2026-11-15 0000001.jpg", today])
     defer { try? FileManager.default.removeItem(at: dir) }
     let fm = HidingFileManager(hiding: today)
-    #expect(FileNamer.counter(of: FileNamer.nextURL(in: dir, fileManager: fm).lastPathComponent) == 3)
+    #expect(FileNamer.counter(of: FileNamer.nextURL(in: dir, date: now, fileManager: fm).lastPathComponent) == 3)
 }
 
 @Test func namesUseTheGregorianYearWhateverTheMacsCalendar() {
