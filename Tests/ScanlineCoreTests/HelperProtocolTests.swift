@@ -238,15 +238,41 @@ func misbehavingHelper(_ bad: [UInt8]) -> HelperTransport.Launcher {
 }
 
 @Test func anOversizedReplyIsRejected() throws {
+    // The header alone must be refused: the client never tries to allocate or read the payload.
     let t = try HelperTransport(launcher: misbehavingHelper([0] + HelperIO.u32(ScanlineHelper.maxResponse + 1)))
-    #expect(throws: ScanError.self) { _ = try t.execute(cdb: [0x12], dataIn: 10, dataOut: []) }
+    #expect {
+        _ = try t.execute(cdb: [0x12], dataIn: 10, dataOut: [])
+    } throws: { error in
+        if case ScanError.protocolError(let text) = error { return text.contains("too large") }
+        return false
+    }
 }
 
 @Test func aHelperThatDiesImmediatelyFailsCleanly() throws {
-    // Launch "succeeds" but nothing ever answers: hello sees EOF, the relaunch does too.
+    // Launch "succeeds" but the helper dies without answering: hello sees EOF (or a failed
+    // write, if it is already gone), the relaunch does too, and the error comes back.
     let launches = Locked(0)
     #expect(throws: ScanError.self) {
         _ = try HelperTransport { launches.withLock { $0 += 1 }; return startServer { _, _ in } }
     }
     #expect(launches.withLock { $0 } == 2)
+}
+
+@Test func aHelperThatReadsThenDiesFailsCleanly() throws {
+    // Deterministic variant: the helper reads the request first, then exits without a reply.
+    let launches = Locked(0)
+    #expect(throws: ScanError.self) {
+        _ = try HelperTransport { launches.withLock { $0 += 1 }; return startServer { i, _ in _ = try? HelperIO.readExact(i, 1) } }
+    }
+    #expect(launches.withLock { $0 } == 2)
+}
+
+@Test func aFailedOpenFromALiveHelperReturnsPromptly() throws {
+    // An error reply means the helper is alive: no waiting for it to exit (the reconnect loop
+    // retries every 2 s while no scanner is plugged in).
+    let start = Date()
+    #expect(throws: ScanError.self) {
+        _ = try HelperTransport { serverChannel({ throw ScanError.deviceNotFound }) }
+    }
+    #expect(Date().timeIntervalSince(start) < 0.5)
 }

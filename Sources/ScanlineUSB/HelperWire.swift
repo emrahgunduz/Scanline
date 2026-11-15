@@ -49,11 +49,13 @@ public enum ScanlineHelper {
 // MARK: Framing
 
 public enum HelperIO {
+    public static let writeFailedPrefix = "helper pipe write failed"
+
     public static func writeAll(_ fd: Int32, _ data: [UInt8]) throws {
         var off = 0
         while off < data.count {
             let n = data[off...].withUnsafeBytes { Darwin.write(fd, $0.baseAddress, $0.count) }
-            if n < 0 { if errno == EINTR { continue }; throw ScanError.protocolError("helper pipe write failed (\(errno))") }
+            if n < 0 { if errno == EINTR { continue }; throw ScanError.protocolError("\(writeFailedPrefix) (\(errno))") }
             off += n
         }
     }

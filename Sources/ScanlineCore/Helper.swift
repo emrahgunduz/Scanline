@@ -23,6 +23,8 @@ public final class HelperTransport: ScannerTransport, @unchecked Sendable {
     private let launch: Launcher
     private var channel: Channel
     private var closed = false
+    /// Set when the last request got an error *reply*: the helper is alive, so sudo didn't refuse.
+    private var lastReplyWasError = false
     /// Protocol the connected helper speaks (2 for helpers older than `hello`).
     public private(set) var negotiatedProtocol: UInt32 = 0
 
@@ -44,10 +46,11 @@ public final class HelperTransport: ScannerTransport, @unchecked Sendable {
             }
             _ = try request(.open, [])
         } catch {
-            let reason = explain(error)
+            // Close our end first: a live helper then sees EOF and exits at once, so the
+            // check for a sudo refusal below never waits on a helper that is still running.
             shutDownChannel()
             closed = true
-            throw reason
+            throw lastReplyWasError ? error : (authorisationFailure() ?? error)
         }
     }
 
@@ -74,7 +77,9 @@ public final class HelperTransport: ScannerTransport, @unchecked Sendable {
             guard reply.count >= 4 else { throw ScanError.protocolError("helper sent a malformed hello") }
             return UInt32(HelperIO.u32(reply))
         } catch let error as ScanError {
-            guard case .protocolError(let text) = error, text == Self.stoppedText else { throw error }
+            // The helper went away instead of answering: EOF, or it was gone before we could write.
+            guard case .protocolError(let text) = error,
+                  text == Self.stoppedText || text.hasPrefix(HelperIO.writeFailedPrefix) else { throw error }
             if let refused = authorisationFailure() { throw refused }
             // Legacy helper: it exited on the unknown op. Start a fresh one and skip hello.
             shutDownChannel()
@@ -86,6 +91,7 @@ public final class HelperTransport: ScannerTransport, @unchecked Sendable {
     private static let stoppedText = "the helper stopped"
 
     private func request(_ op: ScanlineHelper.Op, _ body: [UInt8]) throws -> [UInt8] {
+        lastReplyWasError = false
         let out = channel.toHelper.fileDescriptor
         let inp = channel.fromHelper.fileDescriptor
         try HelperIO.writeAll(out, [op.rawValue] + body)
@@ -95,7 +101,10 @@ public final class HelperTransport: ScannerTransport, @unchecked Sendable {
         guard let payload = try HelperIO.readExact(inp, len) else {
             throw ScanError.protocolError("helper reply cut short")
         }
-        if head[0] != 0 { throw ScanError.protocolError(String(decoding: payload, as: UTF8.self)) }
+        if head[0] != 0 {
+            lastReplyWasError = true
+            throw ScanError.protocolError(String(decoding: payload, as: UTF8.self))
+        }
         return payload
     }
 
@@ -113,11 +122,6 @@ public final class HelperTransport: ScannerTransport, @unchecked Sendable {
     }
 
     // MARK: Failure handling
-
-    /// Turns a connect failure into the most useful error: sudo's refusal if that's what happened.
-    private func explain(_ error: Error) -> Error {
-        authorisationFailure() ?? error
-    }
 
     /// If the launched sudo exited because the rule doesn't allow it, the error to show.
     private func authorisationFailure() -> Error? {
