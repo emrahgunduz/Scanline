@@ -38,11 +38,6 @@ public enum ScanlineHelper {
         FileManager.default.fileExists(atPath: installedBinary) && FileManager.default.fileExists(atPath: sudoersFile)
     }
 
-    /// The sudoers rule: this user may run exactly the helper with its one argument, as root.
-    public static func sudoersRule(user: String) -> String {
-        "\(user) ALL=(root) NOPASSWD: \(installedBinary) \(argument)\n"
-    }
-
     public enum Op: UInt8 { case open = 1, execute = 2, close = 3, hello = 4 }
 }
 

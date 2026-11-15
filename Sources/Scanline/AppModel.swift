@@ -276,30 +276,22 @@ final class AppModel {
         guard let bin = Bundle.main.url(forResource: "ScanlineHelper", withExtension: nil) else {
             errorMessage = "The helper is missing from the app bundle."; return
         }
-        let rule = FileManager.default.temporaryDirectory.appendingPathComponent("local.scanline.helper.sudoers")
-        do { try ScanlineHelper.sudoersRule(user: NSUserName()).write(to: rule, atomically: true, encoding: .utf8) }
-        catch { errorMessage = error.localizedDescription; return }
-        func q(_ s: String) -> String { "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }
-        let H = ScanlineHelper.self
-        let script = [
-            // Stop the session so the old helper lets go of the scanner.
-            "launchctl bootout system/\(H.legacyLabel) 2>/dev/null; rm -f \(q(H.legacyPlist))",
-            "mkdir -p /Library/PrivilegedHelperTools",
-            "cp \(q(bin.path)) \(q(H.installedBinary))",
-            "chown root:wheel \(q(H.installedBinary))",
-            "chmod 755 \(q(H.installedBinary))",
-            "/usr/sbin/visudo -cf \(q(rule.path))",
-            "install -m 0440 -o root -g wheel \(q(rule.path)) \(q(H.sudoersFile))",
-            "rm -f \(q(H.legacySudoersFile))",
-        ].joined(separator: " && ")
+        let shell: String
+        do {
+            // The app vets the bundled helper; root re-hashes its own copy and must get the same.
+            let digest = try HelperInstaller.sha256Hex(of: bin)
+            shell = try HelperInstaller.script(bundledHelper: bin.path, expectedDigest: digest, user: NSUserName())
+        } catch {
+            errorMessage = "Can't install the helper: \(error)"; return
+        }
+        // Stop the session so the old helper lets go of the scanner.
         session?.stop()
-        let apple = "do shell script \"\(script.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\""))\" with administrator privileges with prompt \"Scanline needs to install its scanner helper.\""
+        let apple = HelperInstaller.appleScript(running: shell, prompt: "Scanline needs to install its scanner helper.")
         var err: NSDictionary?
         NSAppleScript(source: apple)?.executeAndReturnError(&err)
         if let err, (err[NSAppleScript.errorNumber] as? Int) != -128 {
             errorMessage = "Installing the helper failed: \(err[NSAppleScript.errorMessage] ?? err)"
         }
-        try? FileManager.default.removeItem(at: rule)
         startSession()
     }
 }
