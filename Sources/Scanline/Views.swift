@@ -73,6 +73,9 @@ struct SidebarView: View {
             if let kind = model.helperBanner {
                 HelperBanner(model: model, kind: kind).padding(12)
             }
+            if model.updates.showsBanner {
+                UpdateBanner(updates: model.updates).padding(.horizontal, 12).padding(.bottom, 12)
+            }
         }
         .frame(minHeight: 0, maxHeight: .infinity, alignment: .top)
     }
@@ -573,5 +576,29 @@ struct AccentPillStyle: ButtonStyle {
             .background(Theme.accent.opacity(configuration.isPressed ? 0.8 : 1), in: RoundedRectangle(cornerRadius: 9))
             .shadow(color: Theme.accent.opacity(0.35), radius: 4, y: 2)
             .contentShape(RoundedRectangle(cornerRadius: 9))
+    }
+}
+
+/// A newer release exists. Compact and neutral; dismissing hides this version only.
+struct UpdateBanner: View {
+    let updates: UpdateController
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "arrow.down.circle.fill").foregroundStyle(Theme.accent)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Scanline \(updates.available.flatMap { ReleaseVersion($0.tag)?.description } ?? "update") is available")
+                    .font(.callout.weight(.semibold)).lineLimit(1)
+                Button("View Release") { updates.openRelease() }
+                    .buttonStyle(.link).controlSize(.small)
+            }
+            Spacer(minLength: 0)
+            Button { updates.dismissBanner() } label: { Image(systemName: "xmark") }
+                .buttonStyle(.borderless).foregroundStyle(.secondary)
+                .help("Hide until the next release").accessibilityLabel("Dismiss update")
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
     }
 }
