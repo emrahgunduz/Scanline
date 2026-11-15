@@ -62,7 +62,13 @@ root and has to happen inside your login session. Scanline therefore installs:
 - `/Library/PrivilegedHelperTools/local.scanline.helper`, a small program that only moves scanner
   commands between the app and the device, and
 - `/etc/sudoers.d/scanline-helper`, a rule that lets **your** user run exactly that program with
-  its single `--stdio` argument as root, without a password.
+  its single `--stdio` argument as root, without a password. The rule is pinned to the helper's
+  SHA-256, so sudo refuses to run the file if it is ever replaced; reinstalling the helper from
+  Scanline writes a new rule for the new file.
+
+The installer stages the new helper, hashes the copy as root (it must match what the app checked),
+validates the rule with `visudo`, and only then swaps in the helper and the rule, so a failed or
+cancelled install leaves the previous one working.
 
 The app starts the helper as its child and talks to it over a pipe. When Scanline quits (or
 crashes) the helper releases the scanner and exits, and macOS gets the device back.
